@@ -1,6 +1,8 @@
 # feeds-cli
 
-`feeds-cli` は、RSS/Atom と HTML スクレイピングをローカル完結で扱う Bun-native なニュースフィード CLI です。設定は JSON5、記事ストアは SQLite で管理します。
+UNIX 哲学に基づくローカル完結のニュースフィード CLI。Bun + TypeScript。
+
+設定は JSON5、記事ストアは SQLite。外部 API 不要。
 
 ## インストール
 
@@ -8,29 +10,16 @@
 bun install
 ```
 
-## 使い方
+## データの保存先
 
-```bash
-feeds add "HN" "https://news.ycombinator.com/rss"
-feeds scan
-feeds list --unread
-feeds list --unread --format json
-feeds read <article-id>
-feeds list-feeds --format json
-```
+[XDG Base Directory Spec](https://specifications.freedesktop.org/basedir-spec/latest/) に準拠:
 
-HTML スクレイプを使う場合:
+| 種類 | パス | 環境変数 |
+|------|------|---------|
+| 設定 | `~/.config/feeds-cli/feeds.json5` | `$XDG_CONFIG_HOME` |
+| データ | `~/.local/share/feeds-cli/feeds.db` | `$XDG_DATA_HOME` |
 
-```bash
-feeds add "Example Blog" "https://example.com/blog" --scrape-selector "a.post-link" --tags tech,blog
-```
-
-## 共通フラグ
-
-- `--config <path>`: 設定ファイルのパス。デフォルトは `~/.config/feeds-cli/feeds.json5`
-- `--db <path>`: SQLite DB のパス。デフォルトは `~/.config/feeds-cli/feeds.db`
-- `--format json`: JSON 出力
-- `--quiet`, `-q`: 成功時の出力を抑制
+`--config <path>` / `--db <path>` フラグで個別に上書き可能。
 
 ## 設定ファイル
 
@@ -38,16 +27,8 @@ feeds add "Example Blog" "https://example.com/blog" --scrape-selector "a.post-li
 {
   feeds: [
     {
-      name: "Example Blog",
-      url: "https://example.com/feed.xml",
-      tags: ["tech"],
-    },
-    {
-      name: "Scrape Target",
-      url: "https://example.com/blog",
-      scrape: {
-        selector: "a.post-link",
-      },
+      name: "HN",
+      url: "https://news.ycombinator.com/rss",
       tags: ["tech"],
     },
   ],

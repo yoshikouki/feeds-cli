@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with this repository.
 
 ## What is this?
 
@@ -12,52 +12,37 @@ feeds-cli is a UNIX-philosophy RSS/Atom feed reader CLI built with Bun and TypeS
 bun install              # Install dependencies
 bun test                 # Run all tests
 bun test tests/db.test.ts  # Run a single test file
-bun run src/index.ts     # Run the CLI
-bun run src/index.ts add "HN" "https://news.ycombinator.com/rss"  # Example usage
 ```
 
 ## Bun Runtime Rules
 
 - Always use `bun` instead of `node`, `ts-node`, `npm`, `yarn`, `pnpm`, `npx`
 - Use `bun:sqlite` (not better-sqlite3), `Bun.file`/`Bun.write` (not node:fs readFile/writeFile)
+- Use `Bun.JSON5` for JSON5 parse/stringify (not json5 package)
 - Bun auto-loads .env — don't use dotenv
-- For Bun API details: `node_modules/bun-types/docs/**.mdx`
 
 ## Architecture
 
 ```
 src/
-├── index.ts          # Entry point: runCli(argv, deps?) → exit code
-├── types.ts          # All shared TypeScript types
-├── commands/
-│   ├── index.ts      # Command dispatcher + handlers (add, remove, scan, list, read, etc.)
-│   └── helpers.ts    # Output formatting, arg parsing, duration parsing
+├── types.ts          # All shared TypeScript types (zero imports)
+├── paths.ts          # XDG path resolution (config + data dirs)
 ├── config/
-│   └── index.ts      # JSON5 config I/O (~/.config/feeds-cli/feeds.json5)
-├── db/
-│   └── index.ts      # SQLite layer: articles + feeds tables
-└── feed/
-    ├── index.ts      # scanFeeds orchestration, URL normalization, dedup
-    ├── parser.ts     # RSS 2.0 / Atom 1.0 XML parsing (fast-xml-parser)
-    └── scrape.ts     # HTML scraping with CSS selectors (linkedom)
+│   └── index.ts      # JSON5 config I/O (Bun.JSON5)
+└── db/
+    └── index.ts      # SQLite layer (bun:sqlite, Disposable)
 ```
+
+### Data Locations (XDG Base Directory Spec)
+
+- **Config**: `$XDG_CONFIG_HOME/feeds-cli/feeds.json5` (default `~/.config/feeds-cli/`)
+- **Data**: `$XDG_DATA_HOME/feeds-cli/feeds.db` (default `~/.local/share/feeds-cli/`)
+- CLI flags `--config`/`--db` override individual file paths
 
 ### Key Design Patterns
 
-- **Dependency injection for testability**: `runCli` accepts `CliDeps` (stdout, stderr, fetchImpl, now) so tests can mock I/O and time
-- **Dual output**: Every command supports `--format json` for machine consumption; default is human-readable tab-separated
-- **Exit codes**: 0 = success, 1 = error (scriptable)
-- **Dedup by URL**: Articles are unique by normalized URL (hash stripped, default ports removed); `INSERT OR IGNORE` in SQLite
-
-### Data Flow
-
-```
-feeds.json5 → scan → fetch URL → detect format →
-  ├── XML → parser.ts (RSS 2.0 or Atom 1.0)
-  └── HTML (if scrape config) → scrape.ts (CSS selector)
-→ normalize & dedup → SQLite (articles + feeds tables)
-→ list/read commands query SQLite → stdout
-```
+- **Disposable DB**: `FeedDatabase implements Disposable` — use `using db = new FeedDatabase(path)` for automatic cleanup
+- **Dedup by URL**: Articles are unique by normalized URL; `INSERT OR IGNORE` in SQLite
 
 ### Database Schema (bun:sqlite)
 
@@ -66,15 +51,6 @@ feeds.json5 → scan → fetch URL → detect format →
 
 ## Testing
 
-- Tests live in `tests/` with fixtures in `tests/fixtures/`
-- Integration test (`cli.test.ts`): uses temp files and mocked fetch to test full CLI workflow
-- Unit tests: db operations (`:memory:` SQLite), XML parser with fixture files
+- Tests live in `tests/`
+- Unit tests: paths, config (temp files), db (`:memory:` SQLite)
 - Pattern: `import { test, expect } from "bun:test";`
-
-## Dependencies
-
-| Package | Purpose |
-|---------|---------|
-| fast-xml-parser | RSS/Atom XML parsing |
-| json5 | Config file format (supports comments) |
-| linkedom | HTML DOM parsing for scraping |
