@@ -1,5 +1,7 @@
 {
   "name": "feeds-cli",
+  "description": "UNIX philosophy-based news feed CLI for collecting and managing feeds locally.",
+  "module": "src/index.ts",
   "type": "module",
   "private": true,
   "scripts": {
