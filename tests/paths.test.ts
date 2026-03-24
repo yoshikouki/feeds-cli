@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { resolvePaths } from "../src/paths";
 
 describe("resolvePaths", () => {
+  const envKeys = ["XDG_CONFIG_HOME", "XDG_DATA_HOME"] as const;
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    for (const key of ["FEEDS_CLI_DIR", "FEEDS_CLI_CONFIG", "FEEDS_CLI_DB"]) {
+    for (const key of envKeys) {
       saved[key] = process.env[key];
       delete process.env[key];
     }
@@ -20,50 +21,61 @@ describe("resolvePaths", () => {
     }
   });
 
-  test("defaults to ~/feeds-cli/", () => {
+  test("defaults to XDG standard paths", () => {
     const paths = resolvePaths();
-    const expected = join(homedir(), "feeds-cli");
-    expect(paths.dir).toBe(expected);
-    expect(paths.config).toBe(join(expected, "feeds.json5"));
-    expect(paths.db).toBe(join(expected, "feeds.db"));
+    const home = homedir();
+    expect(paths.configDir).toBe(join(home, ".config", "feeds-cli"));
+    expect(paths.dataDir).toBe(join(home, ".local", "share", "feeds-cli"));
+    expect(paths.config).toBe(
+      join(home, ".config", "feeds-cli", "feeds.json5"),
+    );
+    expect(paths.db).toBe(
+      join(home, ".local", "share", "feeds-cli", "feeds.db"),
+    );
   });
 
-  test("FEEDS_CLI_DIR overrides base directory", () => {
-    process.env.FEEDS_CLI_DIR = "/tmp/custom-feeds";
+  test("XDG_CONFIG_HOME overrides config directory", () => {
+    process.env.XDG_CONFIG_HOME = "/tmp/xdg-config";
     const paths = resolvePaths();
-    expect(paths.dir).toBe("/tmp/custom-feeds");
-    expect(paths.config).toBe("/tmp/custom-feeds/feeds.json5");
-    expect(paths.db).toBe("/tmp/custom-feeds/feeds.db");
+    expect(paths.configDir).toBe("/tmp/xdg-config/feeds-cli");
+    expect(paths.config).toBe("/tmp/xdg-config/feeds-cli/feeds.json5");
+    // data dir unaffected
+    expect(paths.dataDir).toBe(
+      join(homedir(), ".local", "share", "feeds-cli"),
+    );
   });
 
-  test("FEEDS_CLI_CONFIG overrides config path only", () => {
-    process.env.FEEDS_CLI_CONFIG = "/tmp/other/config.json5";
+  test("XDG_DATA_HOME overrides data directory", () => {
+    process.env.XDG_DATA_HOME = "/tmp/xdg-data";
     const paths = resolvePaths();
-    expect(paths.config).toBe("/tmp/other/config.json5");
-    expect(paths.db).toBe(join(homedir(), "feeds-cli", "feeds.db"));
+    expect(paths.dataDir).toBe("/tmp/xdg-data/feeds-cli");
+    expect(paths.db).toBe("/tmp/xdg-data/feeds-cli/feeds.db");
+    // config dir unaffected
+    expect(paths.configDir).toBe(join(homedir(), ".config", "feeds-cli"));
   });
 
-  test("FEEDS_CLI_DB overrides db path only", () => {
-    process.env.FEEDS_CLI_DB = "/tmp/other/data.db";
-    const paths = resolvePaths();
-    expect(paths.db).toBe("/tmp/other/data.db");
-    expect(paths.config).toBe(join(homedir(), "feeds-cli", "feeds.json5"));
+  test("CLI flags override config path", () => {
+    const paths = resolvePaths({ config: "/tmp/custom.json5" });
+    expect(paths.config).toBe("/tmp/custom.json5");
+    // db uses default
+    expect(paths.db).toBe(
+      join(homedir(), ".local", "share", "feeds-cli", "feeds.db"),
+    );
   });
 
-  test("CLI flags take precedence over env vars", () => {
-    process.env.FEEDS_CLI_CONFIG = "/tmp/env-config.json5";
-    process.env.FEEDS_CLI_DB = "/tmp/env-data.db";
+  test("CLI flags override db path", () => {
+    const paths = resolvePaths({ db: "/tmp/custom.db" });
+    expect(paths.db).toBe("/tmp/custom.db");
+  });
+
+  test("CLI flags take precedence over XDG env vars", () => {
+    process.env.XDG_CONFIG_HOME = "/tmp/xdg-config";
+    process.env.XDG_DATA_HOME = "/tmp/xdg-data";
     const paths = resolvePaths({
-      config: "/tmp/flag-config.json5",
-      db: "/tmp/flag-data.db",
+      config: "/tmp/flag.json5",
+      db: "/tmp/flag.db",
     });
-    expect(paths.config).toBe("/tmp/flag-config.json5");
-    expect(paths.db).toBe("/tmp/flag-data.db");
-  });
-
-  test("partial flags override only specified paths", () => {
-    const paths = resolvePaths({ config: "/tmp/only-config.json5" });
-    expect(paths.config).toBe("/tmp/only-config.json5");
-    expect(paths.db).toBe(join(homedir(), "feeds-cli", "feeds.db"));
+    expect(paths.config).toBe("/tmp/flag.json5");
+    expect(paths.db).toBe("/tmp/flag.db");
   });
 });

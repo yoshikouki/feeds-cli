@@ -2,29 +2,38 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 
-const DEFAULT_DIR = join(homedir(), "feeds-cli");
+const APP_NAME = "feeds-cli";
 
 export interface ResolvedPaths {
-  dir: string;
+  configDir: string;
+  dataDir: string;
   config: string;
   db: string;
 }
 
 /**
- * Resolve data directory, config path, and db path.
- * Priority: CLI flags > env vars > default ~/feeds-cli/
+ * Resolve config and data paths following XDG Base Directory Spec.
+ *
+ * Config: $XDG_CONFIG_HOME/feeds-cli/ (default ~/.config/feeds-cli/)
+ * Data:   $XDG_DATA_HOME/feeds-cli/   (default ~/.local/share/feeds-cli/)
+ *
+ * Priority: CLI flags > env vars > XDG defaults
  */
 export function resolvePaths(flags?: {
   config?: string;
   db?: string;
 }): ResolvedPaths {
-  const dir = process.env.FEEDS_CLI_DIR || DEFAULT_DIR;
+  const home = homedir();
+  const configDir =
+    join(process.env.XDG_CONFIG_HOME || join(home, ".config"), APP_NAME);
+  const dataDir =
+    join(process.env.XDG_DATA_HOME || join(home, ".local", "share"), APP_NAME);
 
   return {
-    dir,
-    config:
-      flags?.config ?? process.env.FEEDS_CLI_CONFIG ?? join(dir, "feeds.json5"),
-    db: flags?.db ?? process.env.FEEDS_CLI_DB ?? join(dir, "feeds.db"),
+    configDir,
+    dataDir,
+    config: flags?.config ?? join(configDir, "feeds.json5"),
+    db: flags?.db ?? join(dataDir, "feeds.db"),
   };
 }
 
