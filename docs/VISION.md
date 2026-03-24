@@ -1,103 +1,98 @@
-# VISION.md — feeds-cli が目指すもの
+# VISION.md — What feeds-cli aims to be
 
-## 一言で
+## In a word
 
-**情報収集の「事務」を、自分のものにする。**
+**Own your information pipeline.**
 
-## なぜ作るのか
+## Why
 
-ウェブ上の情報を追いかけるのは、現代の知的労働者にとって「やらないわけにいかない事務」のひとつ。しかし既存のツールは「読む体験」に最適化されていて、「集めて、選んで、使う」パイプラインの一部としては設計されていない。
+Keeping up with the web is unavoidable housekeeping for anyone who works with knowledge. Yet most tools optimize for the *reading* experience, not for the *collect → filter → use* pipeline. They assume a human sitting in a GUI.
 
-自分のワークフローに組み込める、プログラマブルで透明なフィード収集ツールが欲しい。SaaS に預けるのではなく、自分のマシンで、自分のルールで動くもの。
+We want a feed tool that slots into any workflow — scripts, cron jobs, agents, pipes. One that runs on your machine, under your rules, with no external service required.
 
-## 思想
+## Philosophy
 
-### UNIX 哲学に従う
+### Follow the UNIX way
 
-- 一つのことをうまくやる
-- テキストストリームを共通インターフェースにする
-- 小さなプログラムを組み合わせて大きな仕事をする
+- Do one thing well.
+- Use text streams as the universal interface.
+- Compose small programs into larger workflows.
 
-feeds-cli は「フィードから記事を集めて構造化する」ことだけをやる。要約、配信、表示は別のツールの仕事。パイプで繋げばいい。
+feeds-cli collects and structures articles from feeds. Summarizing, delivering, and displaying them is someone else's job. Pipe it.
 
-### LLM は要らない、でも繋がる
+### LLM-optional
 
-LLM なしで記事の収集・管理・本文取得・重複排除まで完結する。LLM は「あると便利」であって「ないと動かない」にはしない。
+The entire collect → manage → extract → deduplicate cycle works without an LLM. An LLM is a nice-to-have, never a must-have.
 
-`--format json` を全コマンドで提供することで、LLM やエージェントとの連携は stdin/stdout で自然に実現される。特別な統合は不要。
+Every command supports `--format json`, so LLMs and agents connect through stdin/stdout naturally. No special integration needed.
 
-### 人が触る場所は人に優しく、機械が触る場所は機械に優しく
+### Human-friendly where humans touch, machine-friendly where machines touch
 
-- 設定ファイル（feeds.json5）→ 人が読み書きする → JSON5（コメント書ける、trailing comma OK）
-- 記事データ（feeds.db）→ 機械が読み書きする → SQLite（クエリ柔軟、壊れにくい、高速）
-- 出力 → 人にもエージェントにも → デフォルトは human-readable、`--format json` で構造化
+- **Config** (feeds.json5) → humans read and write it → JSON5 (comments, trailing commas)
+- **Data** (feeds.db) → machines read and write it → SQLite (flexible queries, crash-resistant, fast)
+- **Output** → both → human-readable by default, `--format json` for structure
 
-### ストレージは一つ、出口は複数
+### One store, many exits
 
-記事の真実は SQLite に一本化する。Markdown、JSON、CSV、将来的には任意のフォーマットへのエクスポートはインターフェースの問題として解決する。ナレッジグラフの入力にしたければ `--format md` で吐けばいい。ストレージの選択とデータの利活用は分離する。
+The single source of truth is SQLite. Markdown, JSON, CSV, or any future format is an *interface* concern solved by export. Want to feed a knowledge graph? `--format md`. Want to pipe into `jq`? `--format json`. Storage choice and data utilization are decoupled.
 
-### ローカル完結
+### Local-first
 
-外部サービスへの依存ゼロ。API キー不要。ネットワークが要るのはフィードを取りに行くときだけ。データは全て手元にある。
+Zero external service dependencies. No API keys. Network is only needed to fetch feeds. All data stays on your machine.
 
-## 設計原則
+## Design principles
 
-### 非対話的であること
+### Non-interactive
 
-全コマンドがスクリプトや cron から呼べる。確認プロンプトは `-y` で抑制できる。exit code で成功/失敗を伝える。
+Every command is scriptable and cron-friendly. Confirmation prompts can be suppressed with `-y`. Exit codes communicate success or failure.
 
-### フィード単位で操作できること
+### Per-feed granularity
 
-全件一括ではなく、フィード名を指定して scan、list、read ができる。20 フィード登録していても、1つだけ更新したいときに全部回す必要はない。
+Scan, list, and read by feed name. If you have 20 feeds registered, you shouldn't have to poll all of them just to check one.
 
-### 壊れたフィードに気づけること
+### Detect broken feeds
 
-フィードは死ぬ。URL が変わる。RSS が止まる。サイトが閉じる。feeds-cli はフィードの健全性を追跡し、異常を検知する。死んだフィードを放置しない。
+Feeds die. URLs change. RSS stops updating. Sites shut down. feeds-cli tracks feed health and surfaces anomalies. Dead feeds don't go unnoticed.
 
-### 速いこと
+### Fast
 
-Bun のネイティブ SQLite、ネイティブ fetch、ネイティブテストランナーを使う。外部ランタイム不要。起動が速く、スキャンが速く、クエリが速い。CLI ツールは速さが正義。
+Native SQLite, native fetch, native test runner — all from Bun. No external runtime. Fast startup, fast scans, fast queries. For a CLI tool, speed is a feature.
 
-## アーキテクチャ概要
+## Architecture
 
-```
-feeds.json5（フィード定義・人が管理）
-    │
-    ▼
-  scan ─── RSS/Atom パース or HTML スクレイピング
-    │
-    ▼
-  SQLite（articles テーブル・feeds テーブル）
-    │
-    ├── list ──→ stdout（human-readable or JSON）
-    ├── fetch ──→ 本文取得・readability 抽出
-    ├── dedupe ──→ 重複検出・マーク
-    ├── health ──→ フィード死亡検知
-    └── export ──→ md / json / csv
+```mermaid
+flowchart TD
+    A["feeds.json5\n(feed definitions — human-managed)"] --> B["scan"]
+    B -->|"RSS/Atom parse\nor HTML scrape"| C["SQLite\n(articles + feeds tables)"]
+    C --> D["list → stdout\n(human-readable or JSON)"]
+    C --> E["fetch → content extraction\n(readability)"]
+    C --> F["dedupe → duplicate detection"]
+    C --> G["health → feed liveness check"]
+    C --> H["export → md / json / csv"]
 ```
 
-## ロードマップ
+## Roadmap
 
-### v0.1 — 基盤
+### v0.1 — Foundation
 
-フィードの登録・スキャン・記事一覧・既読管理。RSS/Atom + HTML スクレイピング。`--format json` 全対応。ここで日常利用に耐えるものにする。
+Register feeds, scan, list articles, manage read state. RSS/Atom + HTML scraping. `--format json` on every command. Usable for daily workflows.
 
-### v0.2 — キュレーション
+### v0.2 — Curation
 
-本文取得（readability 抽出）、重複排除、フィード死亡検知、複数フォーマットへのエクスポート。「集めた記事を使える状態にする」層。
+Content extraction (readability), deduplication, feed health checks, multi-format export. The layer that turns collected articles into actionable material.
 
-### v0.3 — 配布
+### v0.3 — Distribution
 
-シングルバイナリビルド（`bun build --compile`）、npm publish、ドキュメント整備。誰でも使えるようにする。
+Single-binary build (`bun build --compile`), npm publish, documentation. Make it easy for anyone to use.
 
-### v1.0 — 安定
+### v1.0 — Stable
 
-実運用フィードバックを反映。API を安定化。壊さない約束をする。
+Incorporate real-world feedback. Stabilize the API. A promise not to break things.
 
-## 名前について
+## On the name
 
-`feeds-cli` — 何をするツールか、名前だけでわかる。凝った名前は要らない。
+`feeds-cli` — the name tells you what it does. No cleverness needed.
 
 ---
 
-*このドキュメントはプロダクトの方向性を示すもの。実装の詳細は変わりうるが、思想は変わらない。*
+*This document describes the direction. Implementation details may change. The philosophy won't.*
