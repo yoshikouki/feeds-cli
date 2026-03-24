@@ -1,23 +1,12 @@
 {
   "name": "feeds-cli",
-  "description": "UNIX philosophy-based news feed CLI for collecting and managing feeds locally.",
-  "module": "src/index.ts",
   "type": "module",
   "private": true,
-  "bin": {
-    "feeds": "./src/index.ts"
-  },
   "scripts": {
-    "start": "bun run src/index.ts",
     "test": "bun test"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5"
-  },
-  "dependencies": {
-    "fast-xml-parser": "^5.5.9",
-    "json5": "^2.2.3",
-    "linkedom": "^0.18.12"
   }
 }
