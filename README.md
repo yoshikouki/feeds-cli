@@ -2,7 +2,7 @@
 
 UNIX 哲学に基づくローカル完結のニュースフィード CLI。Bun + TypeScript。
 
-設定は JSON5、記事ストアは SQLite。外部 API 不要。
+RSS 2.0 / Atom 1.0 / JSON Feed 1.1 / HTML スクレイピングに対応。設定は JSON5、記事ストアは SQLite。外部 API 不要。
 
 ## インストール
 

@@ -4,7 +4,15 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## What is this?
 
-feeds-cli is a UNIX-philosophy RSS/Atom feed reader CLI built with Bun and TypeScript. Local-first, no external APIs. Data in SQLite, config in JSON5.
+feeds-cli is a UNIX-philosophy feed reader CLI built with Bun and TypeScript. Local-first, no external APIs. Data in SQLite, config in JSON5.
+
+### Supported Feed Formats
+
+- RSS 2.0 (XML)
+- Atom 1.0 (XML)
+- JSON Feed 1.1 (JSON)
+- HTML scraping (CSS selectors)
+- *Future: ActivityPub/ActivityStreams*
 
 ## Commands
 

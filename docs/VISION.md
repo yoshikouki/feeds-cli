@@ -58,12 +58,32 @@ Feeds die. URLs change. RSS stops updating. Sites shut down. feeds-cli tracks fe
 
 Native SQLite, native fetch, native test runner — all from Bun. No external runtime. Fast startup, fast scans, fast queries. For a CLI tool, speed is a feature.
 
+## Supported Feed Formats
+
+| Format | Type | Status |
+|--------|------|--------|
+| RSS 2.0 | XML (pull) | Planned |
+| Atom 1.0 | XML (pull) | Planned |
+| JSON Feed 1.1 | JSON (pull) | Planned |
+| HTML scraping | HTML + CSS selectors (pull) | Planned |
+| ActivityPub/ActivityStreams | JSON-LD (pull outbox / push) | Future |
+
+RSS, Atom, JSON Feed は全て「URL を fetch → パース → 記事一覧」という同じ pull モデル。パーサーを差し替えるだけで対応できる。
+
+ActivityPub は pull (outbox fetch) と push (server-to-server delivery) の両方がありえる。将来対応時は fetch 層の拡張が必要になるが、パース後の記事データは同じ `FeedCandidateArticle` に正規化される設計とする。
+
 ## Architecture
 
 ```mermaid
 flowchart TD
     A["feeds.json5\n(feed definitions — human-managed)"] --> B["scan"]
-    B -->|"RSS/Atom parse\nor HTML scrape"| C["SQLite\n(articles + feeds tables)"]
+    B -->|"detect format"| P["parser"]
+    P -->|"RSS 2.0 / Atom 1.0"| X["XML parser"]
+    P -->|"JSON Feed 1.1"| J["JSON parser"]
+    P -->|"HTML scrape"| S["CSS selector"]
+    P -->|"future: ActivityPub"| AP["outbox fetch"]
+    X & J & S & AP --> N["normalize → FeedCandidateArticle[]"]
+    N --> C["SQLite\n(articles + feeds tables)"]
     C --> D["list → stdout\n(human-readable or JSON)"]
     C --> E["fetch → content extraction\n(readability)"]
     C --> F["dedupe → duplicate detection"]
@@ -75,7 +95,7 @@ flowchart TD
 
 ### v0.1 — Foundation
 
-Register feeds, scan, list articles, manage read state. RSS/Atom + HTML scraping. `--format json` on every command. Usable for daily workflows.
+Register feeds, scan, list articles, manage read state. RSS 2.0 / Atom 1.0 / JSON Feed 1.1 + HTML scraping. `--format json` on every command. Usable for daily workflows.
 
 ### v0.2 — Curation
 
@@ -84,6 +104,10 @@ Content extraction (readability), deduplication, feed health checks, multi-forma
 ### v0.3 — Distribution
 
 Single-binary build (`bun build --compile`), npm publish, documentation. Make it easy for anyone to use.
+
+### v0.4 — Federation
+
+ActivityPub/ActivityStreams support. Mastodon 等の分散 SNS の outbox を feed source として購読可能に。
 
 ### v1.0 — Stable
 
