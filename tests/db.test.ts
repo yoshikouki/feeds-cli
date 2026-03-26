@@ -1,8 +1,24 @@
 import { describe, test, expect } from "bun:test";
 import { FeedDatabase } from "../src/db";
+import type { InsertArticleInput } from "../src/types";
 
 function createTestDb(): FeedDatabase {
   return new FeedDatabase(":memory:");
+}
+
+function insertTestArticle(
+  db: FeedDatabase,
+  feedId: string,
+  overrides: Partial<InsertArticleInput> = {},
+): { inserted: boolean; id: string | null } {
+  return db.insertArticle({
+    feedId,
+    url: "https://example.com/post",
+    title: "Test Post",
+    discoveredAt: "2025-01-01T00:00:00Z",
+    sourceFormat: "rss",
+    ...overrides,
+  });
 }
 
 describe("FeedDatabase", () => {
@@ -12,19 +28,33 @@ describe("FeedDatabase", () => {
       {
         using db = createTestDb();
         dbRef = db;
-        db.upsertFeedDefinition({ name: "Test", url: "https://example.com" });
+        db.upsertFeedFromConfig({ name: "Test", url: "https://example.com" });
         expect(db.listFeedStates()).toHaveLength(1);
       }
-      // After dispose, db should be closed
       expect(() => dbRef!.listFeedStates()).toThrow();
     });
   });
 
   describe("feed operations", () => {
+    test("upsertFeedFromConfig creates feed with UUID", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
+
+      expect(feed.id).toBeString();
+      expect(feed.id.length).toBeGreaterThan(0);
+      expect(feed.name).toBe("HN");
+      expect(feed.url).toBe("https://hn.com/rss");
+      expect(feed.status).toBe("active");
+      expect(feed.errorCount).toBe(0);
+    });
+
     test("upsert and list feeds", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
-      db.upsertFeedDefinition({
+      db.upsertFeedFromConfig({ name: "HN", url: "https://hn.com/rss" });
+      db.upsertFeedFromConfig({
         name: "Lobsters",
         url: "https://lobste.rs/rss",
       });
@@ -33,28 +63,54 @@ describe("FeedDatabase", () => {
       expect(feeds).toHaveLength(2);
       expect(feeds[0].name).toBe("HN");
       expect(feeds[0].status).toBe("active");
-      expect(feeds[0].errorCount).toBe(0);
+      expect(feeds[0].id).toBeString();
       expect(feeds[1].name).toBe("Lobsters");
     });
 
-    test("upsert updates url on conflict", () => {
+    test("upsert updates url, preserves id", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://old.com" });
-      db.upsertFeedDefinition({ name: "HN", url: "https://new.com" });
+      const first = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://old.com",
+      });
+      const second = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://new.com",
+      });
+
+      expect(second.id).toBe(first.id);
+      expect(second.url).toBe("https://new.com");
 
       const feeds = db.listFeedStates();
       expect(feeds).toHaveLength(1);
       expect(feeds[0].url).toBe("https://new.com");
     });
 
-    test("removeFeed deletes feed and its articles", () => {
+    test("getFeedByName returns feed or null", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
+      db.upsertFeedFromConfig({ name: "HN", url: "https://hn.com/rss" });
+
+      const found = db.getFeedByName("HN");
+      expect(found).not.toBeNull();
+      expect(found!.name).toBe("HN");
+
+      const notFound = db.getFeedByName("missing");
+      expect(notFound).toBeNull();
+    });
+
+    test("removeFeed cascades to articles and tags", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
       db.insertArticle({
-        feedName: "HN",
+        feedId: feed.id,
         url: "https://example.com/1",
         title: "Article 1",
         discoveredAt: "2025-01-01T00:00:00Z",
+        sourceFormat: "rss",
+        tags: ["tech"],
       });
 
       db.removeFeed("HN");
@@ -64,15 +120,22 @@ describe("FeedDatabase", () => {
 
     test("markFeedScanSuccess resets error state", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
-      db.markFeedScanError("HN", "2025-01-01T00:00:00Z");
-      db.markFeedScanError("HN", "2025-01-02T00:00:00Z");
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
+      db.markFeedScanError(feed.id, "2025-01-01T00:00:00Z");
+      db.markFeedScanError(feed.id, "2025-01-02T00:00:00Z");
 
       let feeds = db.listFeedStates();
       expect(feeds[0].errorCount).toBe(2);
       expect(feeds[0].status).toBe("error");
 
-      db.markFeedScanSuccess("HN", "2025-01-03T00:00:00Z", "2025-01-03T00:00:00Z");
+      db.markFeedScanSuccess(
+        feed.id,
+        "2025-01-03T00:00:00Z",
+        "2025-01-03T00:00:00Z",
+      );
       feeds = db.listFeedStates();
       expect(feeds[0].errorCount).toBe(0);
       expect(feeds[0].status).toBe("active");
@@ -82,17 +145,30 @@ describe("FeedDatabase", () => {
   });
 
   describe("article operations", () => {
-    test("insert and list articles", () => {
+    test("insert and list articles with rich metadata", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
 
       const result = db.insertArticle({
-        feedName: "HN",
+        feedId: feed.id,
         url: "https://example.com/post",
+        externalId: "guid-123",
         title: "Test Post",
+        summary: "A summary",
         content: "Hello world",
+        authors: [{ name: "Alice", url: "https://alice.example.com" }],
+        categories: ["tech", "news"],
+        attachments: [
+          { url: "https://example.com/file.pdf", mimeType: "application/pdf" },
+        ],
         publishedAt: "2025-01-15T12:00:00Z",
+        updatedAt: "2025-01-16T00:00:00Z",
         discoveredAt: "2025-01-15T12:30:00Z",
+        language: "en",
+        sourceFormat: "rss",
         tags: ["tech"],
       });
 
@@ -101,27 +177,55 @@ describe("FeedDatabase", () => {
 
       const articles = db.listArticles({});
       expect(articles).toHaveLength(1);
-      expect(articles[0].title).toBe("Test Post");
-      expect(articles[0].read).toBe(false);
-      expect(articles[0].tags).toEqual(["tech"]);
+
+      const a = articles[0];
+      expect(a.title).toBe("Test Post");
+      expect(a.externalId).toBe("guid-123");
+      expect(a.summary).toBe("A summary");
+      expect(a.content).toBe("Hello world");
+      expect(a.authors).toEqual([
+        { name: "Alice", url: "https://alice.example.com" },
+      ]);
+      expect(a.categories).toEqual(["tech", "news"]);
+      expect(a.attachments).toEqual([
+        { url: "https://example.com/file.pdf", mimeType: "application/pdf" },
+      ]);
+      expect(a.publishedAt).toBe("2025-01-15T12:00:00Z");
+      expect(a.updatedAt).toBe("2025-01-16T00:00:00Z");
+      expect(a.language).toBe("en");
+      expect(a.sourceFormat).toBe("rss");
+      expect(a.read).toBe(false);
+      expect(a.tags).toEqual(["tech"]);
     });
 
-    test("dedup by URL (INSERT OR IGNORE)", () => {
+    test("compound unique: same URL in different feeds succeeds", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
+      const hn = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
+      const lobsters = db.upsertFeedFromConfig({
+        name: "Lobsters",
+        url: "https://lobste.rs/rss",
+      });
 
-      const first = db.insertArticle({
-        feedName: "HN",
-        url: "https://example.com/post",
-        title: "First",
-        discoveredAt: "2025-01-01T00:00:00Z",
+      const first = insertTestArticle(db, hn.id);
+      const second = insertTestArticle(db, lobsters.id);
+
+      expect(first.inserted).toBe(true);
+      expect(second.inserted).toBe(true);
+      expect(db.listArticles({})).toHaveLength(2);
+    });
+
+    test("compound unique: same URL in same feed is deduplicated", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
       });
-      const second = db.insertArticle({
-        feedName: "HN",
-        url: "https://example.com/post",
-        title: "Duplicate",
-        discoveredAt: "2025-01-02T00:00:00Z",
-      });
+
+      const first = insertTestArticle(db, feed.id);
+      const second = insertTestArticle(db, feed.id, { title: "Duplicate" });
 
       expect(first.inserted).toBe(true);
       expect(second.inserted).toBe(false);
@@ -131,19 +235,18 @@ describe("FeedDatabase", () => {
 
     test("filter by unread", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
 
-      const r1 = db.insertArticle({
-        feedName: "HN",
+      const r1 = insertTestArticle(db, feed.id, {
         url: "https://example.com/1",
         title: "One",
-        discoveredAt: "2025-01-01T00:00:00Z",
       });
-      db.insertArticle({
-        feedName: "HN",
+      insertTestArticle(db, feed.id, {
         url: "https://example.com/2",
         title: "Two",
-        discoveredAt: "2025-01-02T00:00:00Z",
       });
 
       db.markArticleRead(r1.id!);
@@ -153,45 +256,90 @@ describe("FeedDatabase", () => {
       expect(unread[0].title).toBe("Two");
     });
 
-    test("filter by feed name", () => {
+    test("filter by feedName", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
-      db.upsertFeedDefinition({
+      const hn = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
+      const lobsters = db.upsertFeedFromConfig({
         name: "Lobsters",
         url: "https://lobste.rs/rss",
       });
 
-      db.insertArticle({
-        feedName: "HN",
+      insertTestArticle(db, hn.id, {
         url: "https://example.com/1",
         title: "HN Post",
-        discoveredAt: "2025-01-01T00:00:00Z",
       });
-      db.insertArticle({
-        feedName: "Lobsters",
+      insertTestArticle(db, lobsters.id, {
         url: "https://example.com/2",
         title: "Lobsters Post",
-        discoveredAt: "2025-01-01T00:00:00Z",
       });
 
-      const hn = db.listArticles({ feed: "HN" });
-      expect(hn).toHaveLength(1);
-      expect(hn[0].title).toBe("HN Post");
+      const articles = db.listArticles({ feedName: "HN" });
+      expect(articles).toHaveLength(1);
+      expect(articles[0].title).toBe("HN Post");
+    });
+
+    test("filter by tag", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
+
+      insertTestArticle(db, feed.id, {
+        url: "https://example.com/1",
+        title: "Tagged",
+        tags: ["important"],
+      });
+      insertTestArticle(db, feed.id, {
+        url: "https://example.com/2",
+        title: "Untagged",
+      });
+
+      const articles = db.listArticles({ tag: "important" });
+      expect(articles).toHaveLength(1);
+      expect(articles[0].title).toBe("Tagged");
+    });
+
+    test("filter by FTS search", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
+
+      insertTestArticle(db, feed.id, {
+        url: "https://example.com/1",
+        title: "TypeScript Guide",
+        content: "Learn TypeScript from scratch",
+      });
+      insertTestArticle(db, feed.id, {
+        url: "https://example.com/2",
+        title: "Rust Guide",
+        content: "Learn Rust from scratch",
+      });
+
+      const articles = db.listArticles({ search: "TypeScript" });
+      expect(articles).toHaveLength(1);
+      expect(articles[0].title).toBe("TypeScript Guide");
     });
 
     test("filter by since", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
 
-      db.insertArticle({
-        feedName: "HN",
+      insertTestArticle(db, feed.id, {
         url: "https://example.com/old",
         title: "Old",
         publishedAt: "2025-01-01T00:00:00Z",
         discoveredAt: "2025-01-01T00:00:00Z",
       });
-      db.insertArticle({
-        feedName: "HN",
+      insertTestArticle(db, feed.id, {
         url: "https://example.com/new",
         title: "New",
         publishedAt: "2025-02-01T00:00:00Z",
@@ -205,11 +353,13 @@ describe("FeedDatabase", () => {
 
     test("limit results", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
 
       for (let i = 0; i < 5; i++) {
-        db.insertArticle({
-          feedName: "HN",
+        insertTestArticle(db, feed.id, {
           url: `https://example.com/${i}`,
           title: `Post ${i}`,
           discoveredAt: `2025-01-0${i + 1}T00:00:00Z`,
@@ -221,19 +371,18 @@ describe("FeedDatabase", () => {
 
     test("markAllRead marks all articles", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
 
-      db.insertArticle({
-        feedName: "HN",
+      insertTestArticle(db, feed.id, {
         url: "https://example.com/1",
         title: "One",
-        discoveredAt: "2025-01-01T00:00:00Z",
       });
-      db.insertArticle({
-        feedName: "HN",
+      insertTestArticle(db, feed.id, {
         url: "https://example.com/2",
         title: "Two",
-        discoveredAt: "2025-01-02T00:00:00Z",
       });
 
       const count = db.markAllRead();
@@ -243,28 +392,28 @@ describe("FeedDatabase", () => {
 
     test("markAllRead by feed name", () => {
       using db = createTestDb();
-      db.upsertFeedDefinition({ name: "HN", url: "https://hn.com/rss" });
-      db.upsertFeedDefinition({
+      const hn = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
+      const lobsters = db.upsertFeedFromConfig({
         name: "Lobsters",
         url: "https://lobste.rs/rss",
       });
 
-      db.insertArticle({
-        feedName: "HN",
+      insertTestArticle(db, hn.id, {
         url: "https://example.com/1",
         title: "HN",
-        discoveredAt: "2025-01-01T00:00:00Z",
       });
-      db.insertArticle({
-        feedName: "Lobsters",
+      insertTestArticle(db, lobsters.id, {
         url: "https://example.com/2",
         title: "Lobsters",
-        discoveredAt: "2025-01-01T00:00:00Z",
       });
 
       db.markAllRead("HN");
-      expect(db.listArticles({ unread: true })).toHaveLength(1);
-      expect(db.listArticles({ unread: true })[0].feedName).toBe("Lobsters");
+      const unread = db.listArticles({ unread: true });
+      expect(unread).toHaveLength(1);
+      expect(unread[0].feedId).toBe(lobsters.id);
     });
   });
 });
