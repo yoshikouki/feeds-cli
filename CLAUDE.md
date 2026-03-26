@@ -11,7 +11,6 @@ feeds-cli is a UNIX-philosophy feed reader CLI built with Bun and TypeScript. Lo
 - RSS 2.0 (XML)
 - Atom 1.0 (XML)
 - JSON Feed 1.1 (JSON)
-- HTML scraping (CSS selectors)
 - *Future: ActivityPub/ActivityStreams*
 
 ## Commands
