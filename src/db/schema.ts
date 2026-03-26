@@ -41,6 +41,7 @@ export const feedSources = sqliteTable(
       .notNull()
       .references(() => feeds.id, { onDelete: "cascade" }),
     position: integer("position").notNull(),
+    name: text("name").notNull(),
     kind: text("kind").notNull(),
     url: text("url").notNull(),
     scrapeConfig: text("scrape_config"),
@@ -49,6 +50,7 @@ export const feedSources = sqliteTable(
   },
   (table) => [
     uniqueIndex("feed_sources_feed_url_unique").on(table.feedId, table.url),
+    uniqueIndex("feed_sources_feed_name_unique").on(table.feedId, table.name),
     uniqueIndex("feed_sources_feed_position_unique").on(
       table.feedId,
       table.position,

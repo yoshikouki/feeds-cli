@@ -18,6 +18,7 @@ export type FeedSourceKind =
 
 export interface FeedSourceDefinition {
   id?: string;
+  name: string;
   kind?: FeedSourceKind;
   url: string;
   tags?: string[];
@@ -27,10 +28,7 @@ export interface FeedSourceDefinition {
 export interface FeedDefinition {
   id?: string;
   name: string;
-  url: string;
-  tags?: string[];
-  scrape?: ScrapeConfig;
-  sources?: FeedSourceDefinition[];
+  sources: FeedSourceDefinition[];
 }
 
 export interface ConfigFile {
@@ -40,7 +38,13 @@ export interface ConfigFile {
 // ─── Domain ───
 
 export type FeedStatus = "active" | "dead" | "error";
-export type SourceFormat = "rss" | "atom" | "json" | "rdf" | "scrape";
+export type SourceFormat =
+  | "rss"
+  | "atom"
+  | "json"
+  | "rdf"
+  | "scrape"
+  | "activitypub";
 
 export interface ArticleAuthor {
   name: string;
@@ -59,13 +63,29 @@ export interface ArticleAttachment {
 export interface FeedState {
   id: string;
   name: string;
-  url: string;
   aliases?: string[];
-  sourceCount?: number;
+  sourceCount: number;
+  primarySourceId: string | null;
+  primarySourceName: string | null;
   lastScannedAt: string | null;
   lastArticleAt: string | null;
   errorCount: number;
   status: FeedStatus;
+}
+
+export interface FeedSourceState {
+  id: string;
+  feedId: string;
+  name: string;
+  kind: FeedSourceKind;
+  url: string;
+  position: number;
+  tags: string[];
+  lastScannedAt: string | null;
+  lastArticleAt: string | null;
+  errorCount: number;
+  status: FeedStatus;
+  lastError: string | null;
 }
 
 /** Parser output — format-agnostic, DB-independent */

@@ -28,7 +28,7 @@ Every command supports `--format json`, so LLMs and agents connect through stdin
 
 ### Human-friendly where humans touch, machine-friendly where machines touch
 
-- **Config** (feeds.json5) → humans read and write it → JSON5 (comments, trailing commas)
+- **Config** (feeds.json5) → humans read and write it → JSON5 (feed collections + source definitions, comments, trailing commas)
 - **Data** (feeds.db) → machines read and write it → SQLite (flexible queries, crash-resistant, fast)
 - **Output** → both → human-readable by default, `--format json` for structure
 
@@ -76,14 +76,14 @@ ActivityPub は pull (outbox fetch) と push (server-to-server delivery) の両�
 
 ```mermaid
 flowchart TD
-    A["feeds.json5\n(feed definitions — human-managed)"] --> B["scan"]
+    A["feeds.json5\n(feed collections + source definitions)"] --> B["scan"]
     B -->|"detect format"| P["parser"]
     P -->|"RSS 2.0 / Atom 1.0"| X["XML parser"]
     P -->|"JSON Feed 1.1"| J["JSON parser"]
     P -->|"HTML scrape"| S["CSS selector"]
     P -->|"future: ActivityPub"| AP["outbox fetch"]
     X & J & S & AP --> N["normalize → FeedCandidateArticle[]"]
-    N --> C["SQLite\n(articles + feeds tables)"]
+    N --> C["SQLite\n(feeds + feed_sources + canonical_articles + occurrences)"]
     C --> D["list → stdout\n(human-readable or JSON)"]
     C --> E["fetch → content extraction\n(readability)"]
     C --> F["dedupe → duplicate detection"]

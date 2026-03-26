@@ -28,8 +28,14 @@ bun install
   feeds: [
     {
       name: "HN",
-      url: "https://news.ycombinator.com/rss",
-      tags: ["tech"],
+      sources: [
+        {
+          id: "hn-main",
+          name: "main",
+          url: "https://news.ycombinator.com/rss",
+          tags: ["tech"],
+        },
+      ],
     },
   ],
 }

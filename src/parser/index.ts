@@ -4,7 +4,7 @@ import type {
   ParsedArticle,
   ArticleAuthor,
   ArticleAttachment,
-  FeedDefinition,
+  FeedSourceDefinition,
 } from "../types";
 
 // ── Types ──
@@ -225,16 +225,24 @@ export function parseFeedContent(content: string): ParseFeedResult {
 
 // ── Orchestrator ──
 
-export async function fetchAndParseFeed(
-  feed: FeedDefinition,
+export async function fetchAndParseFeedSource(
+  source: FeedSourceDefinition,
 ): Promise<FetchAndParseResult> {
-  if (feed.scrape) {
+  if (source.kind === "activitypub") {
+    return {
+      articles: [],
+      warnings: [],
+      error: "activitypub not yet implemented",
+    };
+  }
+
+  if (source.scrape) {
     return { articles: [], warnings: [], error: "scraping not yet implemented" };
   }
 
   let raw: string;
   try {
-    raw = await fetchFeed(feed.url);
+    raw = await fetchFeed(source.url);
   } catch (e) {
     return {
       articles: [],

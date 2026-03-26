@@ -20,6 +20,7 @@ CREATE TABLE `feed_sources` (
 	`id` text PRIMARY KEY NOT NULL,
 	`feed_id` text NOT NULL,
 	`position` integer NOT NULL,
+	`name` text NOT NULL,
 	`kind` text NOT NULL,
 	`url` text NOT NULL,
 	`scrape_config` text,
@@ -29,6 +30,8 @@ CREATE TABLE `feed_sources` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `feed_sources_feed_url_unique` ON `feed_sources` (`feed_id`, `url`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `feed_sources_feed_name_unique` ON `feed_sources` (`feed_id`, `name`);
 --> statement-breakpoint
 CREATE UNIQUE INDEX `feed_sources_feed_position_unique` ON `feed_sources` (`feed_id`, `position`);
 --> statement-breakpoint

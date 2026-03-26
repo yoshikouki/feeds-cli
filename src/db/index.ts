@@ -9,6 +9,8 @@ import type {
   ArticleAttachment,
   ArticleAuthor,
   FeedDefinition,
+  FeedSourceKind,
+  FeedSourceState,
   FeedState,
   FeedStatus,
   InsertArticleInput,
@@ -64,13 +66,29 @@ interface ArticleListRow {
 interface FeedStateRow {
   id: string;
   name: string;
-  url: string;
   aliases: string | null;
   sourceCount: number;
+  primarySourceId: string | null;
+  primarySourceName: string | null;
   lastScannedAt: string | null;
   lastArticleAt: string | null;
   errorCount: number;
   status: string;
+}
+
+interface FeedSourceStateRow {
+  id: string;
+  feedId: string;
+  name: string;
+  kind: string;
+  url: string;
+  position: number;
+  tags: string | null;
+  lastScannedAt: string | null;
+  lastArticleAt: string | null;
+  errorCount: number;
+  status: string;
+  lastError: string | null;
 }
 
 const MIGRATIONS_FOLDER = join(import.meta.dir, "migrations");
@@ -138,28 +156,20 @@ export class FeedDatabase implements Disposable {
 
       const feedId = existing?.id ?? feed.id!;
 
-      const persistedSources = tx.select().from(feedSources).where(eq(feedSources.feedId, feedId)).all();
-      const orderedPersistedSources = [...persistedSources].sort(
-        (left, right) => left.position - right.position,
-      );
+      const persistedSources = tx
+        .select()
+        .from(feedSources)
+        .where(eq(feedSources.feedId, feedId))
+        .all();
+      const sourceIds = new Set(feed.sources.map((source) => source.id!));
 
-      for (const [position, source] of (feed.sources ?? []).entries()) {
-        const incomingSource = feedInput.sources?.[position];
-        if (!incomingSource?.id && orderedPersistedSources[position]) {
-          source.id = orderedPersistedSources[position].id;
-        }
-      }
-
-      const sourceIds = new Set(
-        feed.sources?.map((source) => source.id!).filter(Boolean),
-      );
-
-      for (const [position, source] of (feed.sources ?? []).entries()) {
+      for (const [position, source] of feed.sources.entries()) {
         tx.insert(feedSources)
           .values({
             id: source.id!,
             feedId,
             position,
+            name: source.name,
             kind: source.kind ?? inferSourceKind(source.url),
             url: source.url,
             scrapeConfig: source.scrape ? JSON.stringify(source.scrape) : null,
@@ -170,6 +180,7 @@ export class FeedDatabase implements Disposable {
             target: feedSources.id,
             set: {
               position,
+              name: source.name,
               kind: source.kind ?? inferSourceKind(source.url),
               url: source.url,
               scrapeConfig: source.scrape ? JSON.stringify(source.scrape) : null,
@@ -220,20 +231,45 @@ export class FeedDatabase implements Disposable {
     return row ? this.toFeedState(row) : null;
   }
 
-  markFeedScanSuccess(
-    feedId: string,
+  listFeedSources(feedId: string): FeedSourceState[] {
+    const rows = this.sqlite
+      .query(
+        `SELECT
+           fs.id,
+           fs.feed_id as feedId,
+           fs.name,
+           fs.kind,
+           fs.url,
+           fs.position,
+           (
+             SELECT json_group_array(tag)
+             FROM (
+               SELECT fst.tag
+               FROM feed_source_tags fst
+               WHERE fst.feed_source_id = fs.id
+               ORDER BY fst.tag ASC
+             )
+           ) as tags,
+           fss.last_scanned_at as lastScannedAt,
+           fss.last_article_at as lastArticleAt,
+           fss.error_count as errorCount,
+           fss.status,
+           fss.last_error as lastError
+         FROM feed_sources fs
+         LEFT JOIN feed_source_states fss ON fss.feed_source_id = fs.id
+         WHERE fs.feed_id = ?
+         ORDER BY fs.position ASC, fs.created_at ASC, fs.id ASC`,
+      )
+      .all(feedId) as FeedSourceStateRow[];
+
+    return rows.map((row) => this.toFeedSourceState(row));
+  }
+
+  markSourceScanSuccess(
+    feedSourceId: string,
     scannedAt: string,
     lastArticleAt: string | null,
   ): void {
-    const sourceIds = this.db
-      .select({ id: feedSources.id })
-      .from(feedSources)
-      .where(eq(feedSources.feedId, feedId))
-      .all()
-      .map((row) => row.id);
-
-    if (sourceIds.length === 0) return;
-
     this.db
       .update(feedSourceStates)
       .set({
@@ -243,44 +279,40 @@ export class FeedDatabase implements Disposable {
         lastArticleAt: lastArticleAt ?? undefined,
         lastError: null,
       })
-      .where(inArray(feedSourceStates.feedSourceId, sourceIds))
+      .where(eq(feedSourceStates.feedSourceId, feedSourceId))
       .run();
   }
 
-  markFeedScanError(feedId: string, scannedAt: string): void {
-    const sourceIds = this.db
-      .select({ id: feedSources.id })
-      .from(feedSources)
-      .where(eq(feedSources.feedId, feedId))
-      .all()
-      .map((row) => row.id);
+  markSourceScanError(
+    feedSourceId: string,
+    scannedAt: string,
+    errorMessage: string,
+  ): void {
+    const current = this.db
+      .select()
+      .from(feedSourceStates)
+      .where(eq(feedSourceStates.feedSourceId, feedSourceId))
+      .get();
 
-    if (sourceIds.length === 0) return;
-
-    for (const sourceId of sourceIds) {
-      const current = this.db
-        .select()
-        .from(feedSourceStates)
-        .where(eq(feedSourceStates.feedSourceId, sourceId))
-        .get();
-      this.db
-        .insert(feedSourceStates)
-        .values({
-          feedSourceId: sourceId,
+    this.db
+      .insert(feedSourceStates)
+      .values({
+        feedSourceId,
+        status: "error",
+        errorCount: 1,
+        lastScannedAt: scannedAt,
+        lastError: errorMessage,
+      })
+      .onConflictDoUpdate({
+        target: feedSourceStates.feedSourceId,
+        set: {
           status: "error",
-          errorCount: 1,
+          errorCount: (current?.errorCount ?? 0) + 1,
           lastScannedAt: scannedAt,
-        })
-        .onConflictDoUpdate({
-          target: feedSourceStates.feedSourceId,
-          set: {
-            status: "error",
-            errorCount: (current?.errorCount ?? 0) + 1,
-            lastScannedAt: scannedAt,
-          },
-        })
-        .run();
-    }
+          lastError: errorMessage,
+        },
+      })
+      .run();
   }
 
   insertArticle(
@@ -581,13 +613,20 @@ export class FeedDatabase implements Disposable {
       `SELECT
          f.id,
          f.name,
-         COALESCE((
-           SELECT fs.url
+         (
+           SELECT fs.id
            FROM feed_sources fs
            WHERE fs.feed_id = f.id
            ORDER BY fs.position ASC, fs.created_at ASC, fs.id ASC
            LIMIT 1
-         ), '') as url,
+         ) as primarySourceId,
+         (
+           SELECT fs.name
+           FROM feed_sources fs
+           WHERE fs.feed_id = f.id
+           ORDER BY fs.position ASC, fs.created_at ASC, fs.id ASC
+           LIMIT 1
+         ) as primarySourceName,
          (
            SELECT json_group_array(alias)
            FROM (
@@ -651,13 +690,31 @@ export class FeedDatabase implements Disposable {
     return {
       id: row.id,
       name: row.name,
-      url: row.url,
       aliases: row.aliases ? (JSON.parse(row.aliases) as string[]) : [],
       sourceCount: Number(row.sourceCount),
+      primarySourceId: row.primarySourceId,
+      primarySourceName: row.primarySourceName,
       lastScannedAt: row.lastScannedAt,
       lastArticleAt: row.lastArticleAt,
       errorCount: Number(row.errorCount),
       status: row.status as FeedStatus,
+    };
+  }
+
+  private toFeedSourceState(row: FeedSourceStateRow): FeedSourceState {
+    return {
+      id: row.id,
+      feedId: row.feedId,
+      name: row.name,
+      kind: row.kind as FeedSourceKind,
+      url: row.url,
+      position: Number(row.position),
+      tags: row.tags ? (JSON.parse(row.tags) as string[]) : [],
+      lastScannedAt: row.lastScannedAt,
+      lastArticleAt: row.lastArticleAt,
+      errorCount: Number(row.errorCount),
+      status: row.status as FeedStatus,
+      lastError: row.lastError,
     };
   }
 
@@ -716,8 +773,12 @@ function choosePreferredNullableText(
   return choosePreferredText(existing, incoming);
 }
 
-function inferSourceKind(url: string): string {
-  return url.endsWith(".json") ? "json" : "rss";
+function inferSourceKind(url: string): FeedSourceKind {
+  if (url.includes("/outbox")) return "activitypub";
+  if (url.endsWith(".json")) return "json";
+  if (url.endsWith(".rdf")) return "rdf";
+  if (url.endsWith(".atom") || url.includes("/atom")) return "atom";
+  return "rss";
 }
 
 function normalizeCanonicalUrl(url: string): string {

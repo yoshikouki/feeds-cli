@@ -39,54 +39,39 @@ export async function saveConfig(
 
 export function normalizeFeedDefinition(feed: FeedDefinition): FeedDefinition {
   const normalizedSources = normalizeFeedSources(feed);
-  const primarySource = normalizedSources[0] ?? {
-    id: createId(),
-    url: feed.url.trim(),
-    tags: feed.tags?.map((tag) => tag.trim()).filter(Boolean) ?? [],
-    scrape: feed.scrape
-      ? {
-          selector: feed.scrape.selector.trim(),
-          titleSelector: feed.scrape.titleSelector?.trim() || undefined,
-          dateSelector: feed.scrape.dateSelector?.trim() || undefined,
-        }
-      : undefined,
-  };
+  if (normalizedSources.length === 0) {
+    throw new Error(`feed "${feed.name.trim()}" must define at least one source`);
+  }
 
   return {
     id: feed.id?.trim() || createId(),
     name: feed.name.trim(),
-    url: primarySource.url,
-    tags: primarySource.tags ?? [],
-    scrape: primarySource.scrape,
     sources: normalizedSources,
   };
 }
 
 function normalizeFeedSources(feed: FeedDefinition): FeedSourceDefinition[] {
-  const sources =
-    feed.sources && feed.sources.length > 0
-      ? feed.sources
-      : [
-          {
-            url: feed.url,
-            tags: feed.tags,
-            scrape: feed.scrape,
-          },
-        ];
+  return feed.sources.map((source) => {
+    const name = source.name?.trim();
+    if (!name) {
+      throw new Error(`feed "${feed.name.trim()}" has a source without a name`);
+    }
 
-  return sources.map((source) => ({
-    id: source.id?.trim() || createId(),
-    kind: source.kind,
-    url: source.url.trim(),
-    tags: source.tags?.map((tag) => tag.trim()).filter(Boolean) ?? [],
-    scrape: source.scrape
-      ? {
-          selector: source.scrape.selector.trim(),
-          titleSelector: source.scrape.titleSelector?.trim() || undefined,
-          dateSelector: source.scrape.dateSelector?.trim() || undefined,
-        }
-      : undefined,
-  }));
+    return {
+      id: source.id?.trim() || createId(),
+      name,
+      kind: source.kind,
+      url: source.url.trim(),
+      tags: source.tags?.map((tag) => tag.trim()).filter(Boolean) ?? [],
+      scrape: source.scrape
+        ? {
+            selector: source.scrape.selector.trim(),
+            titleSelector: source.scrape.titleSelector?.trim() || undefined,
+            dateSelector: source.scrape.dateSelector?.trim() || undefined,
+          }
+        : undefined,
+    };
+  });
 }
 
 export async function addFeedToConfig(

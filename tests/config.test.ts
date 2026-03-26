@@ -35,44 +35,62 @@ describe("config", () => {
         `{
   // This is a comment
   feeds: [
-    { name: "HN", url: "https://news.ycombinator.com/rss", },
+    {
+      name: "HN",
+      sources: [{ name: "main", url: "https://news.ycombinator.com/rss" }],
+    },
   ],
 }`,
       );
       const config = await loadConfig(configPath);
       expect(config.feeds).toHaveLength(1);
       expect(config.feeds[0].name).toBe("HN");
-      expect(config.feeds[0].url).toBe("https://news.ycombinator.com/rss");
+      expect(config.feeds[0].sources).toHaveLength(1);
+      expect(config.feeds[0].sources?.[0]).toMatchObject({
+        name: "main",
+        url: "https://news.ycombinator.com/rss",
+      });
     });
 
     test("normalizes feed definitions on load", async () => {
       await Bun.write(
         configPath,
-        `{ feeds: [{ name: " HN ", url: " https://example.com/rss " }] }`,
+        `{ feeds: [{ name: " HN ", sources: [{ name: " Primary ", url: " https://example.com/rss " }] }] }`,
       );
       const config = await loadConfig(configPath);
       expect(config.feeds[0].name).toBe("HN");
-      expect(config.feeds[0].url).toBe("https://example.com/rss");
+      expect(config.feeds[0].sources?.[0]).toMatchObject({
+        name: "Primary",
+        url: "https://example.com/rss",
+      });
     });
   });
 
   describe("saveConfig", () => {
     test("writes JSON5 and reads back", async () => {
       const config = {
-        feeds: [{ name: "Test", url: "https://example.com/rss", tags: ["tech"] }],
+        feeds: [
+          {
+            name: "Test",
+            sources: [
+              {
+                name: "primary",
+                url: "https://example.com/rss",
+                tags: ["tech"],
+              },
+            ],
+          },
+        ],
       };
       await saveConfig(configPath, config);
       const loaded = await loadConfig(configPath);
       expect(loaded.feeds).toHaveLength(1);
       expect(loaded.feeds[0].id).toBeString();
-      expect(loaded.feeds[0]).toMatchObject({
-        name: "Test",
-        url: "https://example.com/rss",
-        tags: ["tech"],
-      });
+      expect(loaded.feeds[0]).toMatchObject({ name: "Test" });
       expect(loaded.feeds[0].sources).toHaveLength(1);
       expect(loaded.feeds[0].sources?.[0].id).toBeString();
       expect(loaded.feeds[0].sources?.[0]).toMatchObject({
+        name: "primary",
         url: "https://example.com/rss",
         tags: ["tech"],
       });
@@ -90,32 +108,49 @@ describe("config", () => {
     test("trims whitespace from all fields", () => {
       const result = normalizeFeedDefinition({
         name: " Test ",
-        url: " https://example.com ",
-        tags: [" a ", " ", " b "],
-        scrape: {
-          selector: " .article ",
-          titleSelector: " h2 ",
-          dateSelector: "",
-        },
+        sources: [
+          {
+            name: " Primary ",
+            url: " https://example.com ",
+            tags: [" a ", " ", " b "],
+            scrape: {
+              selector: " .article ",
+              titleSelector: " h2 ",
+              dateSelector: "",
+            },
+          },
+        ],
       });
       expect(result.name).toBe("Test");
-      expect(result.url).toBe("https://example.com");
-      expect(result.tags).toEqual(["a", "b"]);
-      expect(result.scrape?.selector).toBe(".article");
-      expect(result.scrape?.titleSelector).toBe("h2");
-      expect(result.scrape?.dateSelector).toBeUndefined();
       expect(result.id).toBeString();
       expect(result.sources).toHaveLength(1);
-      expect(result.sources?.[0].id).toBeString();
+      expect(result.sources?.[0]).toMatchObject({
+        name: "Primary",
+        url: "https://example.com",
+        tags: ["a", "b"],
+      });
+      expect(result.sources?.[0].scrape?.selector).toBe(".article");
+      expect(result.sources?.[0].scrape?.titleSelector).toBe("h2");
+      expect(result.sources?.[0].scrape?.dateSelector).toBeUndefined();
     });
 
-    test("defaults tags to empty array", () => {
+    test("assigns source ids and defaults tags to empty array", () => {
       const result = normalizeFeedDefinition({
         name: "Test",
-        url: "https://example.com",
+        sources: [{ name: "main", url: "https://example.com" }],
       });
-      expect(result.tags).toEqual([]);
-      expect(result.scrape).toBeUndefined();
+      expect(result.sources?.[0].id).toBeString();
+      expect(result.sources?.[0].tags).toEqual([]);
+      expect(result.sources?.[0].scrape).toBeUndefined();
+    });
+
+    test("requires at least one source", () => {
+      expect(() =>
+        normalizeFeedDefinition({
+          name: "Test",
+          sources: [],
+        }),
+      ).toThrow('feed "Test" must define at least one source');
     });
   });
 
@@ -123,7 +158,7 @@ describe("config", () => {
     test("adds a new feed", async () => {
       await addFeedToConfig(configPath, {
         name: "HN",
-        url: "https://news.ycombinator.com/rss",
+        sources: [{ name: "main", url: "https://news.ycombinator.com/rss" }],
       });
       const config = await loadConfig(configPath);
       expect(config.feeds).toHaveLength(1);
@@ -133,12 +168,12 @@ describe("config", () => {
     test("throws if feed name already exists", async () => {
       await addFeedToConfig(configPath, {
         name: "HN",
-        url: "https://news.ycombinator.com/rss",
+        sources: [{ name: "main", url: "https://news.ycombinator.com/rss" }],
       });
       expect(
         addFeedToConfig(configPath, {
           name: "HN",
-          url: "https://other.com/rss",
+          sources: [{ name: "backup", url: "https://other.com/rss" }],
         }),
       ).rejects.toThrow('feed "HN" already exists');
     });
@@ -148,11 +183,11 @@ describe("config", () => {
     test("removes an existing feed", async () => {
       await addFeedToConfig(configPath, {
         name: "HN",
-        url: "https://news.ycombinator.com/rss",
+        sources: [{ name: "main", url: "https://news.ycombinator.com/rss" }],
       });
       await addFeedToConfig(configPath, {
         name: "Lobsters",
-        url: "https://lobste.rs/rss",
+        sources: [{ name: "main", url: "https://lobste.rs/rss" }],
       });
       await removeFeedFromConfig(configPath, "HN");
       const config = await loadConfig(configPath);
