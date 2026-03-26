@@ -8,7 +8,7 @@ export interface ScrapeConfig {
   dateSelector?: string;
 }
 
-export type FeedSourceKind =
+export type SourceKind =
   | "rss"
   | "atom"
   | "json"
@@ -19,7 +19,7 @@ export type FeedSourceKind =
 export interface FeedSourceDefinition {
   id?: string;
   name: string;
-  kind?: FeedSourceKind;
+  kind?: SourceKind;
   url: string;
   tags?: string[];
   scrape?: ScrapeConfig;
@@ -38,13 +38,6 @@ export interface ConfigFile {
 // ─── Domain ───
 
 export type FeedStatus = "active" | "dead" | "error";
-export type SourceFormat =
-  | "rss"
-  | "atom"
-  | "json"
-  | "rdf"
-  | "scrape"
-  | "activitypub";
 
 export interface ArticleAuthor {
   name: string;
@@ -77,7 +70,7 @@ export interface FeedSourceState {
   id: string;
   feedId: string;
   name: string;
-  kind: FeedSourceKind;
+  kind: SourceKind;
   url: string;
   position: number;
   tags: string[];
@@ -101,7 +94,7 @@ export interface ParsedArticle {
   publishedAt: string | null;
   updatedAt: string | null;
   language: string | null;
-  sourceFormat: SourceFormat;
+  sourceFormat: SourceKind;
 }
 
 /** DB insertion input */
@@ -120,7 +113,7 @@ export interface InsertArticleInput {
   updatedAt?: string | null;
   discoveredAt: string;
   language?: string | null;
-  sourceFormat: SourceFormat;
+  sourceFormat: SourceKind;
   tags?: string[];
   dedupHash?: string | null;
 }
@@ -143,10 +136,33 @@ export interface Article {
   updatedAt: string | null;
   discoveredAt: string;
   language: string | null;
-  sourceFormat: SourceFormat;
+  sourceFormat: SourceKind;
   read: boolean;
   tags: string[];
   dedupHash: string | null;
+}
+
+// ─── Feed Groups ───
+
+export interface FeedGroup {
+  id: string;
+  name: string;
+  parentId: string | null;
+  position: number;
+}
+
+// ─── Scan Log ───
+
+export type ScanStatus = "success" | "error";
+
+export interface ScanLogEntry {
+  id: string;
+  feedSourceId: string;
+  scannedAt: string;
+  status: ScanStatus;
+  articleCount: number | null;
+  errorMessage: string | null;
+  durationMs: number | null;
 }
 
 export function createId(): string {

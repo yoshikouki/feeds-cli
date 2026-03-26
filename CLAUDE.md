@@ -47,14 +47,14 @@ src/
 ```
 Config types (FeedDefinition, ConfigFile)
     ↓
-Domain types (ParsedArticle, Article, FeedState, ArticleAuthor, ArticleAttachment)
+Domain types (ParsedArticle, Article, FeedState, FeedGroup, ScanLogEntry, ArticleAuthor, ArticleAttachment)
     ↑
 DB layer (InsertArticleInput → SQLite)
 ```
 
+- `SourceKind` is the unified type for feed source kinds and source formats: `"rss" | "atom" | "json" | "rdf" | "scrape" | "activitypub"`
 - Parser imports only from `types.ts` (never from `db`)
 - DB imports only from `types.ts`
-- `types.ts` has zero imports
 
 ### Data Locations (XDG Base Directory Spec)
 
@@ -66,17 +66,40 @@ DB layer (InsertArticleInput → SQLite)
 
 - **Disposable DB**: `FeedDatabase implements Disposable` — use `using db = new FeedDatabase(path)` for automatic cleanup
 - **UUID feed IDs**: `feeds.id` (UUID) is the stable PK; `feeds.name` is display-only (UNIQUE index)
-- **Compound dedup**: `UNIQUE(feed_id, url)` — same URL in different feeds is allowed
-- **Rich normalization**: Parser extracts authors, categories, attachments, externalId, summary (separate from content), updatedAt, sourceFormat
-- **Junction table tags**: `article_tags(article_id, tag)` instead of JSON column
-- **FTS5**: `articles_fts` virtual table for full-text search, kept in sync via triggers
+- **Canonical + Occurrences**: `canonical_articles` holds deduplicated article metadata; `article_occurrences` preserves per-source fidelity (title, content, authors as JSON)
+- **Content separation**: `article_contents` table stores article body separately from `canonical_articles` for list query performance
+- **Normalized relations**: `article_authors` and `article_categories` are junction tables for cross-article queries; occurrence JSON preserved for source fidelity
+- **FTS5 standalone**: `canonical_articles_fts` is a standalone FTS5 table (not external content mode), managed by application code — no triggers
+- **Feed groups**: `feed_groups` with self-referencing `parent_id` for tree structure; `feed_group_memberships` for many-to-many
+- **Scan history**: `scan_log` accumulates per-source scan history; `feed_source_states` is the fast-access current state cache
+- **Compound dedup**: `UNIQUE(feed_source_id, source_url)` — same URL in different sources is allowed
+- **Junction table tags**: `article_tags(canonical_article_id, tag)` instead of JSON column
 
-### Database Schema (bun:sqlite)
+### Database Schema (bun:sqlite, Drizzle ORM)
 
-- **feeds**: id (UUID PK), name (UNIQUE), url, last_scanned_at, last_article_at, error_count, status
-- **articles**: id (UUID PK), feed_id (FK → feeds, CASCADE), url, external_id, title, summary, content, authors (JSON), categories (JSON), attachments (JSON), published_at, updated_at, discovered_at, language, source_format, read, dedup_hash, UNIQUE(feed_id, url)
-- **article_tags**: article_id (FK → articles, CASCADE), tag, PK(article_id, tag)
-- **articles_fts**: FTS5 virtual table (title, summary, content)
+**Core:**
+- **feeds**: id (UUID PK), name (UNIQUE), created_at, updated_at
+- **feed_aliases**: feed_id (FK), alias — historical name tracking
+- **feed_sources**: id (PK), feed_id (FK), position, name, kind, url, scrape_config (JSON)
+- **feed_source_tags**: feed_source_id (FK), tag
+- **feed_source_states**: feed_source_id (PK, FK), status, error_count, last_scanned_at, last_article_at, last_error
+
+**Groups:**
+- **feed_groups**: id (PK), name, parent_id (self-ref FK, CASCADE), position
+- **feed_group_memberships**: feed_id (FK), group_id (FK), position
+
+**Articles:**
+- **canonical_articles**: id (PK), canonical_url (indexed), dedup_hash (unique when not null), title, summary, language, published_at, updated_at, first_discovered_at, last_seen_at
+- **article_contents**: canonical_article_id (PK, FK), content, updated_at
+- **article_occurrences**: id (PK), canonical_article_id (FK), feed_id (FK), feed_source_id (FK), source_url, title, summary, content, authors (JSON), categories (JSON), attachments (JSON), source_format, UNIQUE(feed_source_id, source_url)
+- **article_authors**: id (PK), canonical_article_id (FK), name, url, email, position — indexed on name
+- **article_categories**: canonical_article_id (FK), category — PK(canonical_article_id, category)
+- **article_tags**: canonical_article_id (FK), tag — PK(canonical_article_id, tag)
+- **article_states**: canonical_article_id (PK, FK), read_at, archived_at, starred_at
+
+**Observability:**
+- **scan_log**: id (PK), feed_source_id (FK), scanned_at, status, article_count, error_message, duration_ms
+- **canonical_articles_fts**: FTS5 standalone (canonical_article_id UNINDEXED, title, summary, content)
 
 ### Dependencies
 

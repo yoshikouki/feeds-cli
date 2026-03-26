@@ -8,6 +8,8 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+// ─── Feeds ───
+
 export const feeds = sqliteTable(
   "feeds",
   {
@@ -87,6 +89,39 @@ export const feedSourceStates = sqliteTable(
   },
 );
 
+// ─── Feed Groups (P1) ───
+
+export const feedGroups = sqliteTable(
+  "feed_groups",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    parentId: text("parent_id").references((): any => feedGroups.id, {
+      onDelete: "cascade",
+    }),
+    position: integer("position").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("feed_groups_parent_idx").on(table.parentId)],
+);
+
+export const feedGroupMemberships = sqliteTable(
+  "feed_group_memberships",
+  {
+    feedId: text("feed_id")
+      .notNull()
+      .references(() => feeds.id, { onDelete: "cascade" }),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => feedGroups.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.feedId, table.groupId] })],
+);
+
+// ─── Articles ───
+
 export const canonicalArticles = sqliteTable(
   "canonical_articles",
   {
@@ -95,7 +130,6 @@ export const canonicalArticles = sqliteTable(
     dedupHash: text("dedup_hash"),
     title: text("title").notNull(),
     summary: text("summary"),
-    content: text("content"),
     language: text("language"),
     publishedAt: text("published_at"),
     updatedAt: text("updated_at"),
@@ -108,9 +142,18 @@ export const canonicalArticles = sqliteTable(
     uniqueIndex("canonical_articles_dedup_hash_unique")
       .on(table.dedupHash)
       .where(sql`${table.dedupHash} IS NOT NULL`),
+    index("canonical_articles_canonical_url_idx").on(table.canonicalUrl),
     index("canonical_articles_published_idx").on(table.publishedAt),
   ],
 );
+
+export const articleContents = sqliteTable("article_contents", {
+  canonicalArticleId: text("canonical_article_id")
+    .primaryKey()
+    .references(() => canonicalArticles.id, { onDelete: "cascade" }),
+  content: text("content"),
+  updatedAt: text("updated_at").notNull(),
+});
 
 export const articleOccurrences = sqliteTable(
   "article_occurrences",
@@ -152,6 +195,40 @@ export const articleOccurrences = sqliteTable(
   ],
 );
 
+// ─── Article Normalized Relations (P1) ───
+
+export const articleAuthors = sqliteTable(
+  "article_authors",
+  {
+    id: text("id").primaryKey(),
+    canonicalArticleId: text("canonical_article_id")
+      .notNull()
+      .references(() => canonicalArticles.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    url: text("url"),
+    email: text("email"),
+    position: integer("position").notNull(),
+  },
+  (table) => [
+    index("article_authors_canonical_idx").on(table.canonicalArticleId),
+    index("article_authors_name_idx").on(table.name),
+  ],
+);
+
+export const articleCategories = sqliteTable(
+  "article_categories",
+  {
+    canonicalArticleId: text("canonical_article_id")
+      .notNull()
+      .references(() => canonicalArticles.id, { onDelete: "cascade" }),
+    category: text("category").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.canonicalArticleId, table.category] }),
+    index("article_categories_category_idx").on(table.category),
+  ],
+);
+
 export const articleTags = sqliteTable(
   "article_tags",
   {
@@ -175,3 +252,24 @@ export const articleStates = sqliteTable("article_states", {
   starredAt: text("starred_at"),
   updatedAt: text("updated_at").notNull(),
 });
+
+// ─── Scan Log (P2) ───
+
+export const scanLog = sqliteTable(
+  "scan_log",
+  {
+    id: text("id").primaryKey(),
+    feedSourceId: text("feed_source_id")
+      .notNull()
+      .references(() => feedSources.id, { onDelete: "cascade" }),
+    scannedAt: text("scanned_at").notNull(),
+    status: text("status").notNull(),
+    articleCount: integer("article_count"),
+    errorMessage: text("error_message"),
+    durationMs: integer("duration_ms"),
+  },
+  (table) => [
+    index("scan_log_source_idx").on(table.feedSourceId),
+    index("scan_log_scanned_at_idx").on(table.scannedAt),
+  ],
+);

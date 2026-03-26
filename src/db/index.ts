@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 
@@ -9,25 +9,32 @@ import type {
   ArticleAttachment,
   ArticleAuthor,
   FeedDefinition,
-  FeedSourceKind,
+  FeedGroup,
   FeedSourceState,
   FeedState,
   FeedStatus,
   InsertArticleInput,
-  SourceFormat,
+  ScanLogEntry,
+  SourceKind,
 } from "../types";
 import { createId } from "../types";
 import { normalizeFeedDefinition } from "../config";
 import {
+  articleAuthors,
+  articleCategories,
+  articleContents,
   articleOccurrences,
   articleStates,
   articleTags,
   canonicalArticles,
   feedAliases,
+  feedGroupMemberships,
+  feedGroups,
   feeds,
   feedSourceStates,
   feedSources,
   feedSourceTags,
+  scanLog,
 } from "./schema";
 
 export interface ListArticleFilters {
@@ -102,15 +109,21 @@ export class FeedDatabase implements Disposable {
     this.sqlite.exec("PRAGMA foreign_keys = ON");
     this.db = drizzle(this.sqlite, {
       schema: {
+        articleAuthors,
+        articleCategories,
+        articleContents,
         articleOccurrences,
         articleStates,
         articleTags,
         canonicalArticles,
         feedAliases,
+        feedGroupMemberships,
+        feedGroups,
         feeds,
         feedSourceStates,
         feedSources,
         feedSourceTags,
+        scanLog,
       },
     });
     migrate(this.db, { migrationsFolder: MIGRATIONS_FOLDER });
@@ -123,6 +136,8 @@ export class FeedDatabase implements Disposable {
   [Symbol.dispose](): void {
     this.close();
   }
+
+  // ─── Feed CRUD ───
 
   upsertFeedFromConfig(feedInput: FeedDefinition): FeedState {
     const feed = normalizeFeedDefinition(feedInput);
@@ -265,10 +280,86 @@ export class FeedDatabase implements Disposable {
     return rows.map((row) => this.toFeedSourceState(row));
   }
 
+  // ─── Feed Groups ───
+
+  createFeedGroup(
+    name: string,
+    parentId?: string | null,
+    position?: number,
+  ): FeedGroup {
+    const id = createId();
+    const now = new Date().toISOString();
+
+    if (parentId) {
+      this.validateNotDescendant(parentId, id);
+    }
+
+    this.db
+      .insert(feedGroups)
+      .values({
+        id,
+        name,
+        parentId: parentId ?? null,
+        position: position ?? 0,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    return { id, name, parentId: parentId ?? null, position: position ?? 0 };
+  }
+
+  listFeedGroups(): FeedGroup[] {
+    const rows = this.db
+      .select()
+      .from(feedGroups)
+      .orderBy(feedGroups.position, feedGroups.name)
+      .all();
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      parentId: row.parentId,
+      position: row.position,
+    }));
+  }
+
+  addFeedToGroup(
+    feedId: string,
+    groupId: string,
+    position?: number,
+  ): void {
+    this.db
+      .insert(feedGroupMemberships)
+      .values({
+        feedId,
+        groupId,
+        position: position ?? 0,
+      })
+      .onConflictDoNothing()
+      .run();
+  }
+
+  removeFeedFromGroup(feedId: string, groupId: string): void {
+    this.db
+      .delete(feedGroupMemberships)
+      .where(
+        and(
+          eq(feedGroupMemberships.feedId, feedId),
+          eq(feedGroupMemberships.groupId, groupId),
+        ),
+      )
+      .run();
+  }
+
+  // ─── Scan State ───
+
   markSourceScanSuccess(
     feedSourceId: string,
     scannedAt: string,
     lastArticleAt: string | null,
+    articleCount?: number,
+    durationMs?: number,
   ): void {
     this.db
       .update(feedSourceStates)
@@ -281,12 +372,25 @@ export class FeedDatabase implements Disposable {
       })
       .where(eq(feedSourceStates.feedSourceId, feedSourceId))
       .run();
+
+    this.db
+      .insert(scanLog)
+      .values({
+        id: createId(),
+        feedSourceId,
+        scannedAt,
+        status: "success",
+        articleCount: articleCount ?? null,
+        durationMs: durationMs ?? null,
+      })
+      .run();
   }
 
   markSourceScanError(
     feedSourceId: string,
     scannedAt: string,
     errorMessage: string,
+    durationMs?: number,
   ): void {
     const current = this.db
       .select()
@@ -313,7 +417,41 @@ export class FeedDatabase implements Disposable {
         },
       })
       .run();
+
+    this.db
+      .insert(scanLog)
+      .values({
+        id: createId(),
+        feedSourceId,
+        scannedAt,
+        status: "error",
+        errorMessage,
+        durationMs: durationMs ?? null,
+      })
+      .run();
   }
+
+  listScanLog(feedSourceId: string, limit?: number): ScanLogEntry[] {
+    const rows = this.db
+      .select()
+      .from(scanLog)
+      .where(eq(scanLog.feedSourceId, feedSourceId))
+      .orderBy(sql`${scanLog.scannedAt} DESC`)
+      .limit(limit ?? 100)
+      .all();
+
+    return rows.map((row) => ({
+      id: row.id,
+      feedSourceId: row.feedSourceId,
+      scannedAt: row.scannedAt,
+      status: row.status as "success" | "error",
+      articleCount: row.articleCount,
+      errorMessage: row.errorMessage,
+      durationMs: row.durationMs,
+    }));
+  }
+
+  // ─── Articles ───
 
   insertArticle(
     input: InsertArticleInput,
@@ -326,6 +464,7 @@ export class FeedDatabase implements Disposable {
 
     const dedupHash = input.dedupHash ?? null;
     const canonicalUrl = normalizeCanonicalUrl(input.url);
+    const contentValue = input.content ?? null;
 
     return this.db.transaction((tx) => {
       const existingOccurrence = tx
@@ -367,6 +506,7 @@ export class FeedDatabase implements Disposable {
       const canonicalId = existingCanonical?.id ?? createId();
 
       if (!existingCanonical) {
+        // New canonical article
         tx.insert(canonicalArticles)
           .values({
             id: canonicalId,
@@ -374,7 +514,6 @@ export class FeedDatabase implements Disposable {
             dedupHash,
             title: input.title,
             summary: input.summary ?? null,
-            content: input.content ?? null,
             language: input.language ?? null,
             publishedAt: input.publishedAt ?? null,
             updatedAt: input.updatedAt ?? null,
@@ -384,18 +523,39 @@ export class FeedDatabase implements Disposable {
             updatedRecordAt: now,
           })
           .run();
+
+        // Content in separate table
+        tx.insert(articleContents)
+          .values({
+            canonicalArticleId: canonicalId,
+            content: contentValue,
+            updatedAt: now,
+          })
+          .run();
+
+        // FTS index
+        this.ftsInsert(canonicalId, input.title, input.summary ?? null, contentValue);
       } else {
+        // Update existing canonical
+        const existingContent = tx
+          .select({ content: articleContents.content })
+          .from(articleContents)
+          .where(eq(articleContents.canonicalArticleId, canonicalId))
+          .get();
+
+        const mergedSummary = choosePreferredNullableText(
+          existingCanonical.summary,
+          input.summary,
+        );
+        const mergedContent = choosePreferredNullableText(
+          existingContent?.content ?? null,
+          contentValue,
+        );
+
         tx.update(canonicalArticles)
           .set({
             title: choosePreferredText(existingCanonical.title, input.title),
-            summary: choosePreferredNullableText(
-              existingCanonical.summary,
-              input.summary,
-            ),
-            content: choosePreferredNullableText(
-              existingCanonical.content,
-              input.content,
-            ),
+            summary: mergedSummary,
             language: existingCanonical.language ?? input.language ?? null,
             publishedAt: existingCanonical.publishedAt ?? input.publishedAt ?? null,
             updatedAt: input.updatedAt ?? existingCanonical.updatedAt,
@@ -404,8 +564,59 @@ export class FeedDatabase implements Disposable {
           })
           .where(eq(canonicalArticles.id, canonicalId))
           .run();
+
+        // Update content
+        tx.insert(articleContents)
+          .values({
+            canonicalArticleId: canonicalId,
+            content: mergedContent,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: articleContents.canonicalArticleId,
+            set: {
+              content: mergedContent,
+              updatedAt: now,
+            },
+          })
+          .run();
+
+        // Update FTS
+        this.ftsDelete(canonicalId);
+        this.ftsInsert(
+          canonicalId,
+          choosePreferredText(existingCanonical.title, input.title),
+          mergedSummary,
+          mergedContent,
+        );
       }
 
+      // Normalized authors (delete-and-reinsert)
+      tx.delete(articleAuthors)
+        .where(eq(articleAuthors.canonicalArticleId, canonicalId))
+        .run();
+      for (const [position, author] of (input.authors ?? []).entries()) {
+        tx.insert(articleAuthors)
+          .values({
+            id: createId(),
+            canonicalArticleId: canonicalId,
+            name: author.name,
+            url: author.url ?? null,
+            email: author.email ?? null,
+            position,
+          })
+          .run();
+      }
+
+      // Normalized categories (merge with onConflictDoNothing)
+      for (const category of input.categories ?? []) {
+        tx.insert(articleCategories)
+          .values({ canonicalArticleId: canonicalId, category })
+          .onConflictDoNothing()
+          .run();
+      }
+
+      // Occurrence (source-level fidelity)
       const occurrenceId = createId();
       tx.insert(articleOccurrences)
         .values({
@@ -417,7 +628,7 @@ export class FeedDatabase implements Disposable {
           externalId: input.externalId ?? null,
           title: input.title,
           summary: input.summary ?? null,
-          content: input.content ?? null,
+          content: contentValue,
           authors: JSON.stringify(input.authors ?? []),
           categories: JSON.stringify(input.categories ?? []),
           attachments: JSON.stringify(input.attachments ?? []),
@@ -431,6 +642,7 @@ export class FeedDatabase implements Disposable {
         })
         .run();
 
+      // Tags
       for (const tag of input.tags ?? []) {
         tx.insert(articleTags)
           .values({ canonicalArticleId: canonicalId, tag })
@@ -468,8 +680,10 @@ export class FeedDatabase implements Disposable {
       params.push(filters.tag);
     }
     if (filters.search) {
-      joins.push("JOIN article_occurrences_fts fts ON fts.rowid = ao.rowid");
-      clauses.push("article_occurrences_fts MATCH ?");
+      joins.push(
+        "JOIN canonical_articles_fts fts ON fts.canonical_article_id = c.id",
+      );
+      clauses.push("canonical_articles_fts MATCH ?");
       params.push(filters.search);
     }
     if (filters.since) {
@@ -510,6 +724,15 @@ export class FeedDatabase implements Disposable {
       .all(...params) as ArticleListRow[];
 
     return rows.map((row) => this.toArticle(row));
+  }
+
+  getArticleContent(canonicalArticleId: string): string | null {
+    const row = this.db
+      .select({ content: articleContents.content })
+      .from(articleContents)
+      .where(eq(articleContents.canonicalArticleId, canonicalArticleId))
+      .get();
+    return row?.content ?? null;
   }
 
   markArticleRead(id: string): boolean {
@@ -596,6 +819,29 @@ export class FeedDatabase implements Disposable {
     return unreadCount;
   }
 
+  // ─── FTS Management ───
+
+  private ftsInsert(
+    canonicalArticleId: string,
+    title: string,
+    summary: string | null,
+    content: string | null,
+  ): void {
+    this.sqlite.run(
+      `INSERT INTO canonical_articles_fts(canonical_article_id, title, summary, content) VALUES (?, ?, ?, ?)`,
+      [canonicalArticleId, title, summary ?? "", content ?? ""],
+    );
+  }
+
+  private ftsDelete(canonicalArticleId: string): void {
+    this.sqlite.run(
+      `DELETE FROM canonical_articles_fts WHERE canonical_article_id = ?`,
+      [canonicalArticleId],
+    );
+  }
+
+  // ─── Private Helpers ───
+
   private getPrimarySourceId(feedId: string): string | null {
     const source = this.db
       .select({ id: feedSources.id })
@@ -604,6 +850,27 @@ export class FeedDatabase implements Disposable {
       .orderBy(feedSources.position, feedSources.createdAt, feedSources.id)
       .get();
     return source?.id ?? null;
+  }
+
+  private validateNotDescendant(
+    parentId: string,
+    targetId: string,
+  ): void {
+    const visited = new Set<string>();
+    let current: string | null = parentId;
+    while (current) {
+      if (current === targetId) {
+        throw new Error("Circular feed group reference detected");
+      }
+      if (visited.has(current)) break;
+      visited.add(current);
+      const parent = this.db
+        .select({ parentId: feedGroups.parentId })
+        .from(feedGroups)
+        .where(eq(feedGroups.id, current))
+        .get();
+      current = parent?.parentId ?? null;
+    }
   }
 
   private feedStateQuery(name?: string): FeedStateRow[] {
@@ -706,7 +973,7 @@ export class FeedDatabase implements Disposable {
       id: row.id,
       feedId: row.feedId,
       name: row.name,
-      kind: row.kind as FeedSourceKind,
+      kind: row.kind as SourceKind,
       url: row.url,
       position: Number(row.position),
       tags: row.tags ? (JSON.parse(row.tags) as string[]) : [],
@@ -748,7 +1015,7 @@ export class FeedDatabase implements Disposable {
       updatedAt: row.updatedAt,
       discoveredAt: row.discoveredAt,
       language: row.language,
-      sourceFormat: row.sourceFormat as SourceFormat,
+      sourceFormat: row.sourceFormat as SourceKind,
       read: row.readAt !== null,
       tags,
       dedupHash: this.db
@@ -773,7 +1040,7 @@ function choosePreferredNullableText(
   return choosePreferredText(existing, incoming);
 }
 
-function inferSourceKind(url: string): FeedSourceKind {
+function inferSourceKind(url: string): SourceKind {
   if (url.includes("/outbox")) return "activitypub";
   if (url.endsWith(".json")) return "json";
   if (url.endsWith(".rdf")) return "rdf";

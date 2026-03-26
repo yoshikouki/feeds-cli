@@ -1,5 +1,7 @@
 import { describe, test, expect } from "bun:test";
+import { eq } from "drizzle-orm";
 import { FeedDatabase } from "../src/db";
+import { feedGroups } from "../src/db/schema";
 import type { InsertArticleInput } from "../src/types";
 
 function createTestDb(): FeedDatabase {
@@ -494,6 +496,280 @@ describe("FeedDatabase", () => {
       const unread = db.listArticles({ unread: true });
       expect(unread).toHaveLength(1);
       expect(unread[0].feedId).toBe(lobsters.id);
+    });
+
+    test("getArticleContent returns content from article_contents table", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ id: "main", name: "main", url: "https://hn.com/rss" }],
+      });
+
+      const result = db.insertArticle({
+        feedId: feed.id,
+        feedSourceId: "main",
+        url: "https://example.com/post",
+        title: "Test Post",
+        content: "Full article content here",
+        discoveredAt: "2025-01-01T00:00:00Z",
+        sourceFormat: "rss",
+      });
+
+      expect(result.inserted).toBe(true);
+
+      const articles = db.listArticles({});
+      expect(articles).toHaveLength(1);
+      const content = db.getArticleContent(articles[0].canonicalId!);
+      expect(content).toBe("Full article content here");
+    });
+
+    test("getArticleContent returns null for missing canonical id", () => {
+      using db = createTestDb();
+      expect(db.getArticleContent("nonexistent")).toBeNull();
+    });
+  });
+
+  describe("normalized authors and categories", () => {
+    test("insertArticle populates article_authors table", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ id: "main", name: "main", url: "https://hn.com/rss" }],
+      });
+
+      db.insertArticle({
+        feedId: feed.id,
+        feedSourceId: "main",
+        url: "https://example.com/post",
+        title: "Test Post",
+        authors: [
+          { name: "Alice", url: "https://alice.example.com", email: "alice@example.com" },
+          { name: "Bob" },
+        ],
+        discoveredAt: "2025-01-01T00:00:00Z",
+        sourceFormat: "rss",
+      });
+
+      const rows = db.sqlite
+        .query(
+          `SELECT name, url, email, position
+           FROM article_authors
+           ORDER BY position ASC`,
+        )
+        .all() as Array<{ name: string; url: string | null; email: string | null; position: number }>;
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toEqual({
+        name: "Alice",
+        url: "https://alice.example.com",
+        email: "alice@example.com",
+        position: 0,
+      });
+      expect(rows[1]).toEqual({
+        name: "Bob",
+        url: null,
+        email: null,
+        position: 1,
+      });
+    });
+
+    test("insertArticle populates article_categories table", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ id: "main", name: "main", url: "https://hn.com/rss" }],
+      });
+
+      db.insertArticle({
+        feedId: feed.id,
+        feedSourceId: "main",
+        url: "https://example.com/post",
+        title: "Test Post",
+        categories: ["tech", "news", "ai"],
+        discoveredAt: "2025-01-01T00:00:00Z",
+        sourceFormat: "rss",
+      });
+
+      const rows = db.sqlite
+        .query(
+          `SELECT category FROM article_categories ORDER BY category ASC`,
+        )
+        .all() as Array<{ category: string }>;
+
+      expect(rows).toHaveLength(3);
+      expect(rows.map((r) => r.category)).toEqual(["ai", "news", "tech"]);
+    });
+
+    test("authors are replaced on duplicate canonical article", () => {
+      using db = createTestDb();
+      const hn = db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ id: "hn-main", name: "main", url: "https://hn.com/rss" }],
+      });
+      const lobsters = db.upsertFeedFromConfig({
+        name: "Lobsters",
+        sources: [{ id: "lob-main", name: "main", url: "https://lobste.rs/rss" }],
+      });
+
+      db.insertArticle({
+        feedId: hn.id,
+        feedSourceId: "hn-main",
+        url: "https://example.com/same",
+        title: "Shared Article",
+        authors: [{ name: "Alice" }],
+        dedupHash: "shared-hash",
+        discoveredAt: "2025-01-01T00:00:00Z",
+        sourceFormat: "rss",
+      });
+
+      db.insertArticle({
+        feedId: lobsters.id,
+        feedSourceId: "lob-main",
+        url: "https://example.com/same-other-url",
+        title: "Shared Article",
+        authors: [{ name: "Bob" }, { name: "Charlie" }],
+        dedupHash: "shared-hash",
+        discoveredAt: "2025-01-02T00:00:00Z",
+        sourceFormat: "rss",
+      });
+
+      const rows = db.sqlite
+        .query(`SELECT name FROM article_authors ORDER BY position ASC`)
+        .all() as Array<{ name: string }>;
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0].name).toBe("Bob");
+      expect(rows[1].name).toBe("Charlie");
+    });
+  });
+
+  describe("feed groups", () => {
+    test("create and list feed groups", () => {
+      using db = createTestDb();
+      const group = db.createFeedGroup("Tech");
+      expect(group.id).toBeString();
+      expect(group.name).toBe("Tech");
+      expect(group.parentId).toBeNull();
+      expect(group.position).toBe(0);
+
+      const groups = db.listFeedGroups();
+      expect(groups).toHaveLength(1);
+      expect(groups[0].name).toBe("Tech");
+    });
+
+    test("nested groups with parent_id", () => {
+      using db = createTestDb();
+      const parent = db.createFeedGroup("Tech");
+      const child = db.createFeedGroup("Rust", parent.id, 0);
+
+      expect(child.parentId).toBe(parent.id);
+
+      const groups = db.listFeedGroups();
+      expect(groups).toHaveLength(2);
+    });
+
+    test("add and remove feed from group", () => {
+      using db = createTestDb();
+      const group = db.createFeedGroup("Tech");
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ name: "main", url: "https://hn.com/rss" }],
+      });
+
+      db.addFeedToGroup(feed.id, group.id);
+
+      const memberships = db.sqlite
+        .query(`SELECT feed_id, group_id FROM feed_group_memberships`)
+        .all() as Array<{ feed_id: string; group_id: string }>;
+      expect(memberships).toHaveLength(1);
+      expect(memberships[0].feed_id).toBe(feed.id);
+      expect(memberships[0].group_id).toBe(group.id);
+
+      db.removeFeedFromGroup(feed.id, group.id);
+      const after = db.sqlite
+        .query(`SELECT * FROM feed_group_memberships`)
+        .all();
+      expect(after).toHaveLength(0);
+    });
+
+    test("cascade delete removes child groups", () => {
+      using db = createTestDb();
+      const parent = db.createFeedGroup("Tech");
+      db.createFeedGroup("Rust", parent.id);
+
+      db.db.delete(feedGroups).where(eq(feedGroups.id, parent.id)).run();
+
+      const groups = db.listFeedGroups();
+      expect(groups).toHaveLength(0);
+    });
+  });
+
+  describe("scan log", () => {
+    test("markSourceScanSuccess writes to scan_log", () => {
+      using db = createTestDb();
+      const feed = db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ id: "main", name: "main", url: "https://hn.com/rss" }],
+      });
+
+      db.markSourceScanSuccess("main", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 5, 120);
+
+      const logs = db.listScanLog("main");
+      expect(logs).toHaveLength(1);
+      expect(logs[0].status).toBe("success");
+      expect(logs[0].articleCount).toBe(5);
+      expect(logs[0].durationMs).toBe(120);
+      expect(logs[0].errorMessage).toBeNull();
+    });
+
+    test("markSourceScanError writes to scan_log", () => {
+      using db = createTestDb();
+      db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ id: "main", name: "main", url: "https://hn.com/rss" }],
+      });
+
+      db.markSourceScanError("main", "2025-01-01T00:00:00Z", "timeout", 500);
+
+      const logs = db.listScanLog("main");
+      expect(logs).toHaveLength(1);
+      expect(logs[0].status).toBe("error");
+      expect(logs[0].errorMessage).toBe("timeout");
+      expect(logs[0].durationMs).toBe(500);
+    });
+
+    test("scan_log accumulates history", () => {
+      using db = createTestDb();
+      db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ id: "main", name: "main", url: "https://hn.com/rss" }],
+      });
+
+      db.markSourceScanSuccess("main", "2025-01-01T00:00:00Z", null, 3);
+      db.markSourceScanError("main", "2025-01-02T00:00:00Z", "500");
+      db.markSourceScanSuccess("main", "2025-01-03T00:00:00Z", "2025-01-03T00:00:00Z", 7);
+
+      const logs = db.listScanLog("main");
+      expect(logs).toHaveLength(3);
+      expect(logs[0].scannedAt).toBe("2025-01-03T00:00:00Z");
+      expect(logs[0].status).toBe("success");
+      expect(logs[1].status).toBe("error");
+      expect(logs[2].status).toBe("success");
+    });
+
+    test("listScanLog respects limit", () => {
+      using db = createTestDb();
+      db.upsertFeedFromConfig({
+        name: "HN",
+        sources: [{ id: "main", name: "main", url: "https://hn.com/rss" }],
+      });
+
+      for (let i = 0; i < 5; i++) {
+        db.markSourceScanSuccess("main", `2025-01-0${i + 1}T00:00:00Z`, null, i);
+      }
+
+      const logs = db.listScanLog("main", 2);
+      expect(logs).toHaveLength(2);
     });
   });
 });
