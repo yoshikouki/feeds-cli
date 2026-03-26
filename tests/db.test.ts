@@ -67,6 +67,23 @@ describe("FeedDatabase", () => {
       expect(feeds[1].name).toBe("Lobsters");
     });
 
+    test("feed state aggregates multiple sources", () => {
+      using db = createTestDb();
+      db.upsertFeedFromConfig({
+        name: "Platform",
+        url: "https://example.com/rss",
+        sources: [
+          { url: "https://example.com/rss", kind: "rss" },
+          { url: "https://example.com/feed.json", kind: "json" },
+        ],
+      });
+
+      const feed = db.getFeedByName("Platform");
+      expect(feed).not.toBeNull();
+      expect(feed!.sourceCount).toBe(2);
+      expect(feed!.url).toBe("https://example.com/rss");
+    });
+
     test("upsert updates url, preserves id", () => {
       using db = createTestDb();
       const first = db.upsertFeedFromConfig({
@@ -215,6 +232,33 @@ describe("FeedDatabase", () => {
       expect(first.inserted).toBe(true);
       expect(second.inserted).toBe(true);
       expect(db.listArticles({})).toHaveLength(2);
+    });
+
+    test("dedup hash links cross-feed occurrences to the same canonical read state", () => {
+      using db = createTestDb();
+      const hn = db.upsertFeedFromConfig({
+        name: "HN",
+        url: "https://hn.com/rss",
+      });
+      const lobsters = db.upsertFeedFromConfig({
+        name: "Lobsters",
+        url: "https://lobste.rs/rss",
+      });
+
+      const first = insertTestArticle(db, hn.id, {
+        url: "https://example.com/canonical-a",
+        dedupHash: "same-article",
+      });
+      const second = insertTestArticle(db, lobsters.id, {
+        url: "https://example.com/canonical-b",
+        dedupHash: "same-article",
+      });
+
+      expect(first.inserted).toBe(true);
+      expect(second.inserted).toBe(true);
+
+      db.markArticleRead(first.id!);
+      expect(db.listArticles({ unread: true })).toHaveLength(0);
     });
 
     test("compound unique: same URL in same feed is deduplicated", () => {

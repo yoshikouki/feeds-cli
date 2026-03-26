@@ -5,13 +5,17 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run src/db/migrate.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.1",
     "feedsmith": "^3.0.0-next.6"
   }
 }

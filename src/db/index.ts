@@ -1,5 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
+import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 
 import type {
   Article,
@@ -11,40 +14,19 @@ import type {
   InsertArticleInput,
   SourceFormat,
 } from "../types";
-
-// ── Internal row types ──
-
-interface ArticleRow {
-  id: string;
-  feed_id: string;
-  url: string;
-  external_id: string | null;
-  title: string;
-  summary: string | null;
-  content: string | null;
-  authors: string | null;
-  categories: string | null;
-  attachments: string | null;
-  published_at: string | null;
-  updated_at: string | null;
-  discovered_at: string;
-  language: string | null;
-  source_format: string;
-  read: number;
-  dedup_hash: string | null;
-}
-
-interface FeedRow {
-  id: string;
-  name: string;
-  url: string;
-  last_scanned_at: string | null;
-  last_article_at: string | null;
-  error_count: number;
-  status: string;
-}
-
-// ── Public types ──
+import { createId } from "../types";
+import { normalizeFeedDefinition } from "../config";
+import {
+  articleOccurrences,
+  articleStates,
+  articleTags,
+  canonicalArticles,
+  feedAliases,
+  feeds,
+  feedSourceStates,
+  feedSources,
+  feedSourceTags,
+} from "./schema";
 
 export interface ListArticleFilters {
   unread?: boolean;
@@ -56,140 +38,185 @@ export interface ListArticleFilters {
   limit?: number;
 }
 
-// ── Database ──
+type DrizzleDb = BunSQLiteDatabase<typeof import("./schema")>;
+
+interface ArticleListRow {
+  id: string;
+  canonicalId: string;
+  feedId: string;
+  feedSourceId: string;
+  url: string;
+  externalId: string | null;
+  title: string;
+  summary: string | null;
+  content: string | null;
+  authors: string | null;
+  categories: string | null;
+  attachments: string | null;
+  publishedAt: string | null;
+  updatedAt: string | null;
+  discoveredAt: string;
+  language: string | null;
+  sourceFormat: string;
+  readAt: string | null;
+}
+
+interface FeedStateRow {
+  id: string;
+  name: string;
+  url: string;
+  aliases: string | null;
+  sourceCount: number;
+  lastScannedAt: string | null;
+  lastArticleAt: string | null;
+  errorCount: number;
+  status: string;
+}
+
+const MIGRATIONS_FOLDER = join(import.meta.dir, "migrations");
 
 export class FeedDatabase implements Disposable {
-  readonly db: Database;
+  readonly sqlite: Database;
+  readonly db: DrizzleDb;
 
   constructor(path: string) {
-    this.db = new Database(path, { create: true });
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.ensureSchema();
-  }
-
-  private ensureSchema(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS feeds (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        url TEXT NOT NULL,
-        last_scanned_at TEXT,
-        last_article_at TEXT,
-        error_count INTEGER NOT NULL DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'active'
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_name ON feeds(name);
-
-      CREATE TABLE IF NOT EXISTS articles (
-        id TEXT PRIMARY KEY,
-        feed_id TEXT NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
-        url TEXT NOT NULL,
-        external_id TEXT,
-        title TEXT NOT NULL,
-        summary TEXT,
-        content TEXT,
-        authors TEXT,
-        categories TEXT,
-        attachments TEXT,
-        published_at TEXT,
-        updated_at TEXT,
-        discovered_at TEXT NOT NULL,
-        language TEXT,
-        source_format TEXT NOT NULL,
-        read INTEGER NOT NULL DEFAULT 0,
-        dedup_hash TEXT,
-        UNIQUE(feed_id, url)
-      );
-      CREATE INDEX IF NOT EXISTS idx_articles_feed_id ON articles(feed_id);
-      CREATE INDEX IF NOT EXISTS idx_articles_discovered_at ON articles(discovered_at);
-
-      CREATE TABLE IF NOT EXISTS article_tags (
-        article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-        tag TEXT NOT NULL,
-        PRIMARY KEY (article_id, tag)
-      );
-      CREATE INDEX IF NOT EXISTS idx_article_tags_tag ON article_tags(tag);
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
-        title, summary, content,
-        content=articles, content_rowid=rowid
-      );
-
-      CREATE TRIGGER IF NOT EXISTS articles_fts_insert AFTER INSERT ON articles BEGIN
-        INSERT INTO articles_fts(rowid, title, summary, content)
-        VALUES (new.rowid, new.title, new.summary, new.content);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS articles_fts_delete AFTER DELETE ON articles BEGIN
-        INSERT INTO articles_fts(articles_fts, rowid, title, summary, content)
-        VALUES ('delete', old.rowid, old.title, old.summary, old.content);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS articles_fts_update AFTER UPDATE ON articles BEGIN
-        INSERT INTO articles_fts(articles_fts, rowid, title, summary, content)
-        VALUES ('delete', old.rowid, old.title, old.summary, old.content);
-        INSERT INTO articles_fts(rowid, title, summary, content)
-        VALUES (new.rowid, new.title, new.summary, new.content);
-      END;
-    `);
+    this.sqlite = new Database(path, { create: true });
+    this.sqlite.exec("PRAGMA foreign_keys = ON");
+    this.db = drizzle(this.sqlite, {
+      schema: {
+        articleOccurrences,
+        articleStates,
+        articleTags,
+        canonicalArticles,
+        feedAliases,
+        feeds,
+        feedSourceStates,
+        feedSources,
+        feedSourceTags,
+      },
+    });
+    migrate(this.db, { migrationsFolder: MIGRATIONS_FOLDER });
   }
 
   close(): void {
-    this.db.close();
+    this.sqlite.close();
   }
 
   [Symbol.dispose](): void {
     this.close();
   }
 
-  // ── Feed operations ──
+  upsertFeedFromConfig(feedInput: FeedDefinition): FeedState {
+    const feed = normalizeFeedDefinition(feedInput);
+    const now = new Date().toISOString();
 
-  upsertFeedFromConfig(feed: FeedDefinition): FeedState {
-    const existing = this.db
-      .query<FeedRow, [string]>("SELECT * FROM feeds WHERE name = ?")
-      .get(feed.name);
+    this.db.transaction((tx) => {
+      const existing =
+        tx.select().from(feeds).where(eq(feeds.id, feed.id!)).get() ??
+        tx.select().from(feeds).where(eq(feeds.name, feed.name)).get();
 
-    if (existing) {
-      this.db
-        .query("UPDATE feeds SET url = ? WHERE id = ?")
-        .run(feed.url, existing.id);
-      return this.toFeedState({ ...existing, url: feed.url });
-    }
+      if (!existing) {
+        tx.insert(feeds).values({
+          id: feed.id!,
+          name: feed.name,
+          createdAt: now,
+          updatedAt: now,
+        }).run();
+      } else {
+        tx.update(feeds)
+          .set({ name: feed.name, updatedAt: now })
+          .where(eq(feeds.id, existing.id))
+          .run();
 
-    const id = randomUUID();
-    this.db
-      .query(
-        "INSERT INTO feeds (id, name, url, status) VALUES (?, ?, ?, 'active')",
-      )
-      .run(id, feed.name, feed.url);
+        if (existing.name !== feed.name) {
+          tx.insert(feedAliases)
+            .values({ feedId: existing.id, alias: existing.name })
+            .onConflictDoNothing()
+            .run();
+        }
+      }
 
-    return {
-      id,
-      name: feed.name,
-      url: feed.url,
-      lastScannedAt: null,
-      lastArticleAt: null,
-      errorCount: 0,
-      status: "active",
-    };
+      const feedId = existing?.id ?? feed.id!;
+
+      const persistedSources = tx.select().from(feedSources).where(eq(feedSources.feedId, feedId)).all();
+      const orderedPersistedSources = [...persistedSources].sort(
+        (left, right) => left.position - right.position,
+      );
+
+      for (const [position, source] of (feed.sources ?? []).entries()) {
+        const incomingSource = feedInput.sources?.[position];
+        if (!incomingSource?.id && orderedPersistedSources[position]) {
+          source.id = orderedPersistedSources[position].id;
+        }
+      }
+
+      const sourceIds = new Set(
+        feed.sources?.map((source) => source.id!).filter(Boolean),
+      );
+
+      for (const [position, source] of (feed.sources ?? []).entries()) {
+        tx.insert(feedSources)
+          .values({
+            id: source.id!,
+            feedId,
+            position,
+            kind: source.kind ?? inferSourceKind(source.url),
+            url: source.url,
+            scrapeConfig: source.scrape ? JSON.stringify(source.scrape) : null,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: feedSources.id,
+            set: {
+              position,
+              kind: source.kind ?? inferSourceKind(source.url),
+              url: source.url,
+              scrapeConfig: source.scrape ? JSON.stringify(source.scrape) : null,
+              updatedAt: now,
+            },
+          })
+          .run();
+
+        tx.insert(feedSourceStates)
+          .values({
+            feedSourceId: source.id!,
+            status: "active",
+            errorCount: 0,
+          })
+          .onConflictDoNothing()
+          .run();
+
+        tx.delete(feedSourceTags).where(eq(feedSourceTags.feedSourceId, source.id!)).run();
+        for (const tag of source.tags ?? []) {
+          tx.insert(feedSourceTags)
+            .values({ feedSourceId: source.id!, tag })
+            .onConflictDoNothing()
+            .run();
+        }
+      }
+
+      for (const persisted of persistedSources) {
+        if (!sourceIds.has(persisted.id)) {
+          tx.delete(feedSources).where(eq(feedSources.id, persisted.id)).run();
+        }
+      }
+    });
+
+    return this.getFeedByName(feed.name)!;
   }
 
   removeFeed(name: string): void {
-    // CASCADE handles articles and article_tags
-    this.db.query("DELETE FROM feeds WHERE name = ?").run(name);
+    this.db.delete(feeds).where(eq(feeds.name, name)).run();
   }
 
   listFeedStates(): FeedState[] {
-    const rows = this.db
-      .query<FeedRow, []>("SELECT * FROM feeds ORDER BY name ASC")
-      .all();
+    const rows = this.feedStateQuery() as FeedStateRow[];
     return rows.map((row) => this.toFeedState(row));
   }
 
   getFeedByName(name: string): FeedState | null {
-    const row = this.db
-      .query<FeedRow, [string]>("SELECT * FROM feeds WHERE name = ?")
-      .get(name);
+    const row = this.feedStateQuery(name)[0] ?? null;
     return row ? this.toFeedState(row) : null;
   }
 
@@ -198,205 +225,458 @@ export class FeedDatabase implements Disposable {
     scannedAt: string,
     lastArticleAt: string | null,
   ): void {
+    const sourceIds = this.db
+      .select({ id: feedSources.id })
+      .from(feedSources)
+      .where(eq(feedSources.feedId, feedId))
+      .all()
+      .map((row) => row.id);
+
+    if (sourceIds.length === 0) return;
+
     this.db
-      .query(
-        `UPDATE feeds
-         SET last_scanned_at = ?,
-             last_article_at = COALESCE(?, last_article_at),
-             error_count = 0,
-             status = 'active'
-         WHERE id = ?`,
-      )
-      .run(scannedAt, lastArticleAt, feedId);
+      .update(feedSourceStates)
+      .set({
+        status: "active",
+        errorCount: 0,
+        lastScannedAt: scannedAt,
+        lastArticleAt: lastArticleAt ?? undefined,
+        lastError: null,
+      })
+      .where(inArray(feedSourceStates.feedSourceId, sourceIds))
+      .run();
   }
 
   markFeedScanError(feedId: string, scannedAt: string): void {
-    this.db
-      .query(
-        `UPDATE feeds
-         SET last_scanned_at = ?,
-             error_count = error_count + 1,
-             status = 'error'
-         WHERE id = ?`,
-      )
-      .run(scannedAt, feedId);
-  }
+    const sourceIds = this.db
+      .select({ id: feedSources.id })
+      .from(feedSources)
+      .where(eq(feedSources.feedId, feedId))
+      .all()
+      .map((row) => row.id);
 
-  // ── Article operations ──
+    if (sourceIds.length === 0) return;
+
+    for (const sourceId of sourceIds) {
+      const current = this.db
+        .select()
+        .from(feedSourceStates)
+        .where(eq(feedSourceStates.feedSourceId, sourceId))
+        .get();
+      this.db
+        .insert(feedSourceStates)
+        .values({
+          feedSourceId: sourceId,
+          status: "error",
+          errorCount: 1,
+          lastScannedAt: scannedAt,
+        })
+        .onConflictDoUpdate({
+          target: feedSourceStates.feedSourceId,
+          set: {
+            status: "error",
+            errorCount: (current?.errorCount ?? 0) + 1,
+            lastScannedAt: scannedAt,
+          },
+        })
+        .run();
+    }
+  }
 
   insertArticle(
     input: InsertArticleInput,
   ): { inserted: boolean; id: string | null } {
-    const id = randomUUID();
-
-    const result = this.db
-      .query(
-        `INSERT OR IGNORE INTO articles
-         (id, feed_id, url, external_id, title, summary, content,
-          authors, categories, attachments,
-          published_at, updated_at, discovered_at,
-          language, source_format, read, dedup_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-      )
-      .run(
-        id,
-        input.feedId,
-        input.url,
-        input.externalId ?? null,
-        input.title,
-        input.summary ?? null,
-        input.content ?? null,
-        JSON.stringify(input.authors ?? []),
-        JSON.stringify(input.categories ?? []),
-        JSON.stringify(input.attachments ?? []),
-        input.publishedAt ?? null,
-        input.updatedAt ?? null,
-        input.discoveredAt,
-        input.language ?? null,
-        input.sourceFormat,
-        input.dedupHash ?? null,
-      );
-
-    if (result.changes > 0 && input.tags?.length) {
-      const insertTag = this.db.query(
-        "INSERT OR IGNORE INTO article_tags (article_id, tag) VALUES (?, ?)",
-      );
-      for (const tag of input.tags) {
-        insertTag.run(id, tag);
-      }
+    const now = new Date().toISOString();
+    const feedSourceId = input.feedSourceId ?? this.getPrimarySourceId(input.feedId);
+    if (!feedSourceId) {
+      throw new Error(`No feed source found for feed ${input.feedId}`);
     }
 
-    return {
-      inserted: result.changes > 0,
-      id: result.changes > 0 ? id : null,
-    };
+    const dedupHash = input.dedupHash ?? null;
+    const canonicalUrl = normalizeCanonicalUrl(input.url);
+
+    return this.db.transaction((tx) => {
+      const existingOccurrence = tx
+        .select({ id: articleOccurrences.id })
+        .from(articleOccurrences)
+        .where(
+          and(
+            eq(articleOccurrences.feedSourceId, feedSourceId),
+            eq(articleOccurrences.sourceUrl, input.url),
+          ),
+        )
+        .get();
+
+      if (existingOccurrence) {
+        return { inserted: false, id: null };
+      }
+
+      const existingCanonical =
+        (dedupHash
+          ? tx
+              .select()
+              .from(canonicalArticles)
+              .where(eq(canonicalArticles.dedupHash, dedupHash))
+              .get()
+          : undefined) ??
+        tx
+          .select()
+          .from(canonicalArticles)
+          .where(
+            dedupHash
+              ? eq(canonicalArticles.canonicalUrl, canonicalUrl)
+              : and(
+                  eq(canonicalArticles.canonicalUrl, canonicalUrl),
+                  isNull(canonicalArticles.dedupHash),
+                ),
+          )
+          .get();
+
+      const canonicalId = existingCanonical?.id ?? createId();
+
+      if (!existingCanonical) {
+        tx.insert(canonicalArticles)
+          .values({
+            id: canonicalId,
+            canonicalUrl,
+            dedupHash,
+            title: input.title,
+            summary: input.summary ?? null,
+            content: input.content ?? null,
+            language: input.language ?? null,
+            publishedAt: input.publishedAt ?? null,
+            updatedAt: input.updatedAt ?? null,
+            firstDiscoveredAt: input.discoveredAt,
+            lastSeenAt: input.discoveredAt,
+            createdAt: now,
+            updatedRecordAt: now,
+          })
+          .run();
+      } else {
+        tx.update(canonicalArticles)
+          .set({
+            title: choosePreferredText(existingCanonical.title, input.title),
+            summary: choosePreferredNullableText(
+              existingCanonical.summary,
+              input.summary,
+            ),
+            content: choosePreferredNullableText(
+              existingCanonical.content,
+              input.content,
+            ),
+            language: existingCanonical.language ?? input.language ?? null,
+            publishedAt: existingCanonical.publishedAt ?? input.publishedAt ?? null,
+            updatedAt: input.updatedAt ?? existingCanonical.updatedAt,
+            lastSeenAt: input.discoveredAt,
+            updatedRecordAt: now,
+          })
+          .where(eq(canonicalArticles.id, canonicalId))
+          .run();
+      }
+
+      const occurrenceId = createId();
+      tx.insert(articleOccurrences)
+        .values({
+          id: occurrenceId,
+          canonicalArticleId: canonicalId,
+          feedId: input.feedId,
+          feedSourceId,
+          sourceUrl: input.url,
+          externalId: input.externalId ?? null,
+          title: input.title,
+          summary: input.summary ?? null,
+          content: input.content ?? null,
+          authors: JSON.stringify(input.authors ?? []),
+          categories: JSON.stringify(input.categories ?? []),
+          attachments: JSON.stringify(input.attachments ?? []),
+          publishedAt: input.publishedAt ?? null,
+          updatedAt: input.updatedAt ?? null,
+          discoveredAt: input.discoveredAt,
+          language: input.language ?? null,
+          sourceFormat: input.sourceFormat,
+          createdAt: now,
+          updatedRecordAt: now,
+        })
+        .run();
+
+      for (const tag of input.tags ?? []) {
+        tx.insert(articleTags)
+          .values({ canonicalArticleId: canonicalId, tag })
+          .onConflictDoNothing()
+          .run();
+      }
+
+      return { inserted: true, id: occurrenceId };
+    });
   }
 
   listArticles(filters: ListArticleFilters): Article[] {
-    const clauses: string[] = [];
     const params: Array<string | number> = [];
-    let needTagJoin = false;
-    let needFtsJoin = false;
+    const clauses: string[] = [];
+    const joins = [
+      "JOIN canonical_articles c ON c.id = ao.canonical_article_id",
+      "LEFT JOIN article_states s ON s.canonical_article_id = c.id",
+      "JOIN feeds f ON f.id = ao.feed_id",
+    ];
 
     if (filters.unread) {
-      clauses.push("a.read = 0");
+      clauses.push("s.read_at IS NULL");
     }
     if (filters.feedId) {
-      clauses.push("a.feed_id = ?");
+      clauses.push("ao.feed_id = ?");
       params.push(filters.feedId);
     }
     if (filters.feedName) {
-      clauses.push("a.feed_id = (SELECT id FROM feeds WHERE name = ?)");
+      clauses.push("f.name = ?");
       params.push(filters.feedName);
     }
     if (filters.tag) {
-      needTagJoin = true;
+      joins.push("JOIN article_tags t ON t.canonical_article_id = c.id");
       clauses.push("t.tag = ?");
       params.push(filters.tag);
     }
     if (filters.search) {
-      needFtsJoin = true;
-      clauses.push("articles_fts MATCH ?");
+      joins.push("JOIN article_occurrences_fts fts ON fts.rowid = ao.rowid");
+      clauses.push("article_occurrences_fts MATCH ?");
       params.push(filters.search);
     }
     if (filters.since) {
-      clauses.push("COALESCE(a.published_at, a.discovered_at) >= ?");
+      clauses.push("COALESCE(ao.published_at, ao.discovered_at) >= ?");
       params.push(filters.since);
     }
 
-    const joins: string[] = [];
-    if (needTagJoin) {
-      joins.push("JOIN article_tags t ON t.article_id = a.id");
-    }
-    if (needFtsJoin) {
-      joins.push("JOIN articles_fts ON articles_fts.rowid = a.rowid");
-    }
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limitClause = filters.limit ? `LIMIT ${Number(filters.limit)}` : "";
 
-    const whereClause =
-      clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-    const limitClause = filters.limit ? `LIMIT ${filters.limit}` : "";
-
-    const rows = this.db
-      .query<ArticleRow, Array<string | number>>(
-        `SELECT DISTINCT a.*
-         FROM articles a
+    const rows = this.sqlite
+      .query(
+        `SELECT DISTINCT
+           ao.id,
+           ao.canonical_article_id as canonicalId,
+           ao.feed_id as feedId,
+           ao.feed_source_id as feedSourceId,
+           ao.source_url as url,
+           ao.external_id as externalId,
+           ao.title,
+           ao.summary,
+           ao.content,
+           ao.authors,
+           ao.categories,
+           ao.attachments,
+           ao.published_at as publishedAt,
+           ao.updated_at as updatedAt,
+           ao.discovered_at as discoveredAt,
+           ao.language,
+           ao.source_format as sourceFormat,
+           s.read_at as readAt
+         FROM article_occurrences ao
          ${joins.join(" ")}
          ${whereClause}
-         ORDER BY COALESCE(a.published_at, a.discovered_at) DESC, a.discovered_at DESC
+         ORDER BY COALESCE(ao.published_at, ao.discovered_at) DESC, ao.discovered_at DESC
          ${limitClause}`,
       )
-      .all(...params);
+      .all(...params) as ArticleListRow[];
 
     return rows.map((row) => this.toArticle(row));
   }
 
   markArticleRead(id: string): boolean {
-    const count = this.db
-      .query<{ c: number }, [string]>(
-        "SELECT COUNT(*) as c FROM articles WHERE id = ? AND read = 0",
-      )
-      .get(id);
-    if (!count || count.c === 0) return false;
-    this.db.query("UPDATE articles SET read = 1 WHERE id = ?").run(id);
+    const occurrence = this.db
+      .select({
+        canonicalId: articleOccurrences.canonicalArticleId,
+      })
+      .from(articleOccurrences)
+      .where(eq(articleOccurrences.id, id))
+      .get();
+
+    if (!occurrence) return false;
+
+    const existingState = this.db
+      .select()
+      .from(articleStates)
+      .where(eq(articleStates.canonicalArticleId, occurrence.canonicalId))
+      .get();
+
+    if (existingState?.readAt) return false;
+
+    const now = new Date().toISOString();
+    this.db
+      .insert(articleStates)
+      .values({
+        canonicalArticleId: occurrence.canonicalId,
+        readAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: articleStates.canonicalArticleId,
+        set: {
+          readAt: now,
+          updatedAt: now,
+        },
+      })
+      .run();
+
     return true;
   }
 
   markAllRead(feedName?: string): number {
-    const countQuery = feedName
-      ? this.db
-          .query<{ c: number }, [string]>(
-            "SELECT COUNT(*) as c FROM articles WHERE read = 0 AND feed_id = (SELECT id FROM feeds WHERE name = ?)",
-          )
-          .get(feedName)
-      : this.db
-          .query<{ c: number }, []>(
-            "SELECT COUNT(*) as c FROM articles WHERE read = 0",
-          )
-          .get();
+    const where = feedName
+      ? "JOIN feeds f ON f.id = ao.feed_id WHERE f.name = ? AND s.read_at IS NULL"
+      : "WHERE s.read_at IS NULL";
+    const params = feedName ? [feedName] : [];
 
-    const n = countQuery?.c ?? 0;
-    if (n === 0) return 0;
+    const unreadRows = this.sqlite
+      .query(
+        `SELECT ao.canonical_article_id as canonicalId, COUNT(*) as occurrences
+         FROM article_occurrences ao
+         LEFT JOIN article_states s ON s.canonical_article_id = ao.canonical_article_id
+         ${where}
+         GROUP BY ao.canonical_article_id`,
+      )
+      .all(...params) as Array<{ canonicalId: string; occurrences: number }>;
 
-    if (feedName) {
-      this.db
-        .query(
-          "UPDATE articles SET read = 1 WHERE read = 0 AND feed_id = (SELECT id FROM feeds WHERE name = ?)",
-        )
-        .run(feedName);
-    } else {
-      this.db.query("UPDATE articles SET read = 1 WHERE read = 0").run();
-    }
-    return n;
+    const unreadCount = unreadRows.reduce(
+      (sum, row) => sum + Number(row.occurrences),
+      0,
+    );
+    if (unreadCount === 0) return 0;
+
+    const now = new Date().toISOString();
+    this.db.transaction((tx) => {
+      for (const row of unreadRows) {
+        tx.insert(articleStates)
+          .values({
+            canonicalArticleId: row.canonicalId,
+            readAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: articleStates.canonicalArticleId,
+            set: {
+              readAt: now,
+              updatedAt: now,
+            },
+          })
+          .run();
+      }
+    });
+
+    return unreadCount;
   }
 
-  // ── Private helpers ──
+  private getPrimarySourceId(feedId: string): string | null {
+    const source = this.db
+      .select({ id: feedSources.id })
+      .from(feedSources)
+      .where(eq(feedSources.feedId, feedId))
+      .orderBy(feedSources.position, feedSources.createdAt, feedSources.id)
+      .get();
+    return source?.id ?? null;
+  }
 
-  private toFeedState(row: FeedRow): FeedState {
+  private feedStateQuery(name?: string): FeedStateRow[] {
+    const params = name ? [name] : [];
+    const whereClause = name ? "WHERE f.name = ?" : "";
+    return this.sqlite.query(
+      `SELECT
+         f.id,
+         f.name,
+         COALESCE((
+           SELECT fs.url
+           FROM feed_sources fs
+           WHERE fs.feed_id = f.id
+           ORDER BY fs.position ASC, fs.created_at ASC, fs.id ASC
+           LIMIT 1
+         ), '') as url,
+         (
+           SELECT json_group_array(alias)
+           FROM (
+             SELECT fa.alias
+             FROM feed_aliases fa
+             WHERE fa.feed_id = f.id
+             ORDER BY fa.alias ASC
+           )
+         ) as aliases,
+         (
+           SELECT COUNT(*)
+           FROM feed_sources fs
+           WHERE fs.feed_id = f.id
+         ) as sourceCount,
+         (
+           SELECT MAX(fss.last_scanned_at)
+           FROM feed_source_states fss
+           JOIN feed_sources fs ON fs.id = fss.feed_source_id
+           WHERE fs.feed_id = f.id
+         ) as lastScannedAt,
+         (
+           SELECT MAX(fss.last_article_at)
+           FROM feed_source_states fss
+           JOIN feed_sources fs ON fs.id = fss.feed_source_id
+           WHERE fs.feed_id = f.id
+         ) as lastArticleAt,
+         COALESCE((
+           SELECT SUM(fss.error_count)
+           FROM feed_source_states fss
+           JOIN feed_sources fs ON fs.id = fss.feed_source_id
+           WHERE fs.feed_id = f.id
+         ), 0) as errorCount,
+         CASE
+           WHEN EXISTS (
+             SELECT 1
+             FROM feed_source_states fss
+             JOIN feed_sources fs ON fs.id = fss.feed_source_id
+             WHERE fs.feed_id = f.id AND fss.status = 'error'
+           ) THEN 'error'
+           WHEN EXISTS (
+             SELECT 1
+             FROM feed_source_states fss
+             JOIN feed_sources fs ON fs.id = fss.feed_source_id
+             WHERE fs.feed_id = f.id AND fss.status = 'active'
+           ) THEN 'active'
+           WHEN EXISTS (
+             SELECT 1
+             FROM feed_source_states fss
+             JOIN feed_sources fs ON fs.id = fss.feed_source_id
+             WHERE fs.feed_id = f.id AND fss.status = 'dead'
+           ) THEN 'dead'
+           ELSE 'active'
+         END as status
+       FROM feeds f
+       ${whereClause}
+       ORDER BY f.name ASC`,
+    ).all(...params) as FeedStateRow[];
+  }
+
+  private toFeedState(row: FeedStateRow): FeedState {
     return {
       id: row.id,
       name: row.name,
       url: row.url,
-      lastScannedAt: row.last_scanned_at,
-      lastArticleAt: row.last_article_at,
-      errorCount: row.error_count,
+      aliases: row.aliases ? (JSON.parse(row.aliases) as string[]) : [],
+      sourceCount: Number(row.sourceCount),
+      lastScannedAt: row.lastScannedAt,
+      lastArticleAt: row.lastArticleAt,
+      errorCount: Number(row.errorCount),
       status: row.status as FeedStatus,
     };
   }
 
-  private toArticle(row: ArticleRow): Article {
-    // Load tags from junction table
+  private toArticle(row: ArticleListRow): Article {
     const tags = this.db
-      .query<{ tag: string }, [string]>(
-        "SELECT tag FROM article_tags WHERE article_id = ? ORDER BY tag",
-      )
-      .all(row.id)
-      .map((r) => r.tag);
+      .select({ tag: articleTags.tag })
+      .from(articleTags)
+      .where(eq(articleTags.canonicalArticleId, row.canonicalId))
+      .orderBy(articleTags.tag)
+      .all()
+      .map((tag) => tag.tag);
 
     return {
       id: row.id,
-      feedId: row.feed_id,
+      canonicalId: row.canonicalId,
+      feedId: row.feedId,
+      feedSourceId: row.feedSourceId,
       url: row.url,
-      externalId: row.external_id,
+      externalId: row.externalId,
       title: row.title,
       summary: row.summary,
       content: row.content,
@@ -407,14 +687,45 @@ export class FeedDatabase implements Disposable {
       attachments: row.attachments
         ? (JSON.parse(row.attachments) as ArticleAttachment[])
         : [],
-      publishedAt: row.published_at,
-      updatedAt: row.updated_at,
-      discoveredAt: row.discovered_at,
+      publishedAt: row.publishedAt,
+      updatedAt: row.updatedAt,
+      discoveredAt: row.discoveredAt,
       language: row.language,
-      sourceFormat: row.source_format as SourceFormat,
-      read: row.read === 1,
+      sourceFormat: row.sourceFormat as SourceFormat,
+      read: row.readAt !== null,
       tags,
-      dedupHash: row.dedup_hash,
+      dedupHash: this.db
+        .select({ dedupHash: canonicalArticles.dedupHash })
+        .from(canonicalArticles)
+        .where(eq(canonicalArticles.id, row.canonicalId))
+        .get()?.dedupHash ?? null,
     };
+  }
+}
+
+function choosePreferredText(existing: string, incoming: string): string {
+  return existing.length >= incoming.length ? existing : incoming;
+}
+
+function choosePreferredNullableText(
+  existing: string | null,
+  incoming: string | null | undefined,
+): string | null {
+  if (!existing) return incoming ?? null;
+  if (!incoming) return existing;
+  return choosePreferredText(existing, incoming);
+}
+
+function inferSourceKind(url: string): string {
+  return url.endsWith(".json") ? "json" : "rss";
+}
+
+function normalizeCanonicalUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return url;
   }
 }

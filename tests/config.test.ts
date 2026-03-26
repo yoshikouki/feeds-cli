@@ -64,8 +64,15 @@ describe("config", () => {
       await saveConfig(configPath, config);
       const loaded = await loadConfig(configPath);
       expect(loaded.feeds).toHaveLength(1);
-      expect(loaded.feeds[0]).toEqual({
+      expect(loaded.feeds[0].id).toBeString();
+      expect(loaded.feeds[0]).toMatchObject({
         name: "Test",
+        url: "https://example.com/rss",
+        tags: ["tech"],
+      });
+      expect(loaded.feeds[0].sources).toHaveLength(1);
+      expect(loaded.feeds[0].sources?.[0].id).toBeString();
+      expect(loaded.feeds[0].sources?.[0]).toMatchObject({
         url: "https://example.com/rss",
         tags: ["tech"],
       });
@@ -97,6 +104,9 @@ describe("config", () => {
       expect(result.scrape?.selector).toBe(".article");
       expect(result.scrape?.titleSelector).toBe("h2");
       expect(result.scrape?.dateSelector).toBeUndefined();
+      expect(result.id).toBeString();
+      expect(result.sources).toHaveLength(1);
+      expect(result.sources?.[0].id).toBeString();
     });
 
     test("defaults tags to empty array", () => {

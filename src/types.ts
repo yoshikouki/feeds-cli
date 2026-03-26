@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 // ─── Config (JSON5 file shape) ───
 
 export interface ScrapeConfig {
@@ -6,11 +8,29 @@ export interface ScrapeConfig {
   dateSelector?: string;
 }
 
+export type FeedSourceKind =
+  | "rss"
+  | "atom"
+  | "json"
+  | "rdf"
+  | "scrape"
+  | "activitypub";
+
+export interface FeedSourceDefinition {
+  id?: string;
+  kind?: FeedSourceKind;
+  url: string;
+  tags?: string[];
+  scrape?: ScrapeConfig;
+}
+
 export interface FeedDefinition {
+  id?: string;
   name: string;
   url: string;
   tags?: string[];
   scrape?: ScrapeConfig;
+  sources?: FeedSourceDefinition[];
 }
 
 export interface ConfigFile {
@@ -40,6 +60,8 @@ export interface FeedState {
   id: string;
   name: string;
   url: string;
+  aliases?: string[];
+  sourceCount?: number;
   lastScannedAt: string | null;
   lastArticleAt: string | null;
   errorCount: number;
@@ -65,6 +87,7 @@ export interface ParsedArticle {
 /** DB insertion input */
 export interface InsertArticleInput {
   feedId: string;
+  feedSourceId?: string;
   url: string;
   externalId?: string | null;
   title: string;
@@ -85,7 +108,9 @@ export interface InsertArticleInput {
 /** Full article record from DB */
 export interface Article {
   id: string;
+  canonicalId?: string;
   feedId: string;
+  feedSourceId?: string;
   url: string;
   externalId: string | null;
   title: string;
@@ -102,4 +127,8 @@ export interface Article {
   read: boolean;
   tags: string[];
   dedupHash: string | null;
+}
+
+export function createId(): string {
+  return randomUUID();
 }
