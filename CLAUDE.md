@@ -33,13 +33,29 @@ bun test tests/db.test.ts  # Run a single test file
 
 ```
 src/
-├── types.ts          # All shared TypeScript types (zero imports)
+├── types.ts          # All shared types (zero imports): Config, Domain, DB
 ├── paths.ts          # XDG path resolution (config + data dirs)
 ├── config/
 │   └── index.ts      # JSON5 config I/O (Bun.JSON5)
+├── parser/
+│   └── index.ts      # Feed parser (feedsmith v3) — no db dependency
 └── db/
-    └── index.ts      # SQLite layer (bun:sqlite, Disposable)
+    └── index.ts      # SQLite layer (bun:sqlite, Disposable, FTS5)
 ```
+
+### Type Hierarchy
+
+```
+Config types (FeedDefinition, ConfigFile)
+    ↓
+Domain types (ParsedArticle, Article, FeedState, ArticleAuthor, ArticleAttachment)
+    ↑
+DB layer (InsertArticleInput → SQLite)
+```
+
+- Parser imports only from `types.ts` (never from `db`)
+- DB imports only from `types.ts`
+- `types.ts` has zero imports
 
 ### Data Locations (XDG Base Directory Spec)
 
@@ -50,15 +66,25 @@ src/
 ### Key Design Patterns
 
 - **Disposable DB**: `FeedDatabase implements Disposable` — use `using db = new FeedDatabase(path)` for automatic cleanup
-- **Dedup by URL**: Articles are unique by normalized URL; `INSERT OR IGNORE` in SQLite
+- **UUID feed IDs**: `feeds.id` (UUID) is the stable PK; `feeds.name` is display-only (UNIQUE index)
+- **Compound dedup**: `UNIQUE(feed_id, url)` — same URL in different feeds is allowed
+- **Rich normalization**: Parser extracts authors, categories, attachments, externalId, summary (separate from content), updatedAt, sourceFormat
+- **Junction table tags**: `article_tags(article_id, tag)` instead of JSON column
+- **FTS5**: `articles_fts` virtual table for full-text search, kept in sync via triggers
 
 ### Database Schema (bun:sqlite)
 
-- **articles**: id (PK), feed_name, url (UNIQUE), title, content, published_at, discovered_at, read, tags (JSON), dedup_hash
-- **feeds**: name (PK), url, last_scanned_at, last_article_at, error_count, status (active|dead|error)
+- **feeds**: id (UUID PK), name (UNIQUE), url, last_scanned_at, last_article_at, error_count, status
+- **articles**: id (UUID PK), feed_id (FK → feeds, CASCADE), url, external_id, title, summary, content, authors (JSON), categories (JSON), attachments (JSON), published_at, updated_at, discovered_at, language, source_format, read, dedup_hash, UNIQUE(feed_id, url)
+- **article_tags**: article_id (FK → articles, CASCADE), tag, PK(article_id, tag)
+- **articles_fts**: FTS5 virtual table (title, summary, content)
+
+### Dependencies
+
+- `feedsmith@3.x` (RSS/Atom/JSON Feed/RDF parser, TypeScript native)
 
 ## Testing
 
 - Tests live in `tests/`
-- Unit tests: paths, config (temp files), db (`:memory:` SQLite)
+- Unit tests: paths, config (temp files), db (`:memory:` SQLite), parser (inline XML/JSON fixtures)
 - Pattern: `import { test, expect } from "bun:test";`
