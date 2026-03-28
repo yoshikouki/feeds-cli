@@ -1,9 +1,13 @@
 {
   "name": "feeds-cli",
+  "version": "0.1.0",
   "description": "UNIX philosophy-based news feed CLI for collecting and managing feeds locally.",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
+  "bin": {
+    "feeds": "src/cli.ts"
+  },
   "scripts": {
     "test": "bun test",
     "db:generate": "drizzle-kit generate",

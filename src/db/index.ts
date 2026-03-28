@@ -968,6 +968,40 @@ export class FeedDatabase implements Disposable {
     };
   }
 
+  getArticleByOccurrenceId(id: string): Article | null {
+    const rows = this.sqlite
+      .query(
+        `SELECT
+           ao.id,
+           ao.canonical_article_id as canonicalId,
+           ao.feed_id as feedId,
+           ao.feed_source_id as feedSourceId,
+           ao.source_url as url,
+           ao.external_id as externalId,
+           ao.title,
+           ao.summary,
+           ao.content,
+           ao.authors,
+           ao.categories,
+           ao.attachments,
+           ao.published_at as publishedAt,
+           ao.updated_at as updatedAt,
+           ao.discovered_at as discoveredAt,
+           ao.language,
+           ao.source_format as sourceFormat,
+           s.read_at as readAt
+         FROM article_occurrences ao
+         JOIN canonical_articles c ON c.id = ao.canonical_article_id
+         LEFT JOIN article_states s ON s.canonical_article_id = c.id
+         WHERE ao.id = ?`,
+      )
+      .all(id) as ArticleListRow[];
+
+    const row = rows[0];
+    if (!row) return null;
+    return this.toArticle(row);
+  }
+
   private toFeedSourceState(row: FeedSourceStateRow): FeedSourceState {
     return {
       id: row.id,

@@ -206,6 +206,13 @@ function normalizeRdfItems(items: Rdf.Item<string>[]): ParseFeedResult {
   return { articles, warnings };
 }
 
+// ── Detect ──
+
+export function detectFeedFormat(content: string): "rss" | "atom" | "json" | "rdf" {
+  const { format } = parseFeed(content);
+  return format;
+}
+
 // ── Parse ──
 
 export function parseFeedContent(content: string): ParseFeedResult {
