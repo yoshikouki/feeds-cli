@@ -51,8 +51,7 @@ export async function scanCommand(args: ParsedArgs): Promise<void> {
   }
 
   output(results, args.flags.format, (data) => {
-    const scans = data as ScanResult[];
-    return scans
+    return data
       .map((r) => {
         const parts = [
           `${r.feedName}: ${r.articlesInserted} new / ${r.articlesFound} found (${r.sourcesScanned} sources)`,

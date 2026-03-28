@@ -12,10 +12,10 @@ export async function removeCommand(args: ParsedArgs): Promise<void> {
   const paths = resolvePaths(args.flags);
   await ensureDir(paths.dataDir);
 
-  await removeFeedFromConfig(paths.config, name);
-
   using db = new FeedDatabase(paths.db);
   db.removeFeed(name);
+
+  await removeFeedFromConfig(paths.config, name);
 
   output({ name, removed: true }, args.flags.format, () => `Removed feed: ${name}`);
 }

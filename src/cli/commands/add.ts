@@ -11,6 +11,16 @@ export async function addCommand(args: ParsedArgs): Promise<void> {
   const url = args.positionals[0];
   if (!url) throw new UsageError("Usage: feeds add <url> [--name NAME]");
 
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new UsageError(`Unsupported URL scheme: ${parsed.protocol}`);
+    }
+  } catch (e) {
+    if (e instanceof UsageError) throw e;
+    throw new UsageError(`Invalid URL: ${url}`);
+  }
+
   const paths = resolvePaths(args.flags);
   await ensureDir(paths.configDir);
   await ensureDir(paths.dataDir);

@@ -20,7 +20,7 @@ export function outputInfo(message: string): void {
   console.error(message);
 }
 
-export function output(data: unknown, format: Format, humanRenderer: (data: unknown) => string): void {
+export function output<T>(data: T, format: Format, humanRenderer: (data: T) => string): void {
   if (format === "json") {
     outputJson(data);
   } else {

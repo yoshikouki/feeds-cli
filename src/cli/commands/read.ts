@@ -19,15 +19,14 @@ export async function readCommand(args: ParsedArgs): Promise<void> {
     ? db.getArticleContent(article.canonicalId)
     : null;
 
-  db.markArticleRead(id);
+  db.markArticleRead(article.id);
 
   const result = { ...article, content: content ?? article.content };
 
-  output(result, args.flags.format, (data) => {
-    const a = data as typeof result;
+  output(result, args.flags.format, (a) => {
     const lines: string[] = [];
     lines.push(a.title);
-    lines.push("─".repeat(Math.min(a.title.length * 2, 60)));
+    lines.push("─".repeat(60));
     if (a.publishedAt) lines.push(`Date:  ${a.publishedAt}`);
     lines.push(`URL:   ${a.url}`);
     if (a.authors.length > 0)
@@ -50,6 +49,15 @@ function stripHtml(html: string): string {
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n\n")
     .replace(/<[^>]+>/g, "")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&nbsp;/g, " ")
+    .replace(/&mdash;/g, "\u2014")
+    .replace(/&ndash;/g, "\u2013")
+    .replace(/&rsquo;/g, "\u2019")
+    .replace(/&lsquo;/g, "\u2018")
+    .replace(/&rdquo;/g, "\u201D")
+    .replace(/&ldquo;/g, "\u201C")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")

@@ -684,7 +684,7 @@ export class FeedDatabase implements Disposable {
         "JOIN canonical_articles_fts fts ON fts.canonical_article_id = c.id",
       );
       clauses.push("canonical_articles_fts MATCH ?");
-      params.push(filters.search);
+      params.push(`"${filters.search.replace(/"/g, '""')}"`);
     }
     if (filters.since) {
       clauses.push("COALESCE(ao.published_at, ao.discovered_at) >= ?");
@@ -969,6 +969,7 @@ export class FeedDatabase implements Disposable {
   }
 
   getArticleByOccurrenceId(id: string): Article | null {
+    const isPrefix = id.length < 36;
     const rows = this.sqlite
       .query(
         `SELECT
@@ -993,9 +994,13 @@ export class FeedDatabase implements Disposable {
          FROM article_occurrences ao
          JOIN canonical_articles c ON c.id = ao.canonical_article_id
          LEFT JOIN article_states s ON s.canonical_article_id = c.id
-         WHERE ao.id = ?`,
+         WHERE ${isPrefix ? "ao.id LIKE ? || '%'" : "ao.id = ?"}`,
       )
       .all(id) as ArticleListRow[];
+
+    if (isPrefix && rows.length > 1) {
+      throw new Error(`Ambiguous ID prefix "${id}" matches ${rows.length} articles. Use a longer prefix.`);
+    }
 
     const row = rows[0];
     if (!row) return null;

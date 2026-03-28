@@ -11,12 +11,11 @@ export async function feedsCommand(args: ParsedArgs): Promise<void> {
   const states = db.listFeedStates();
 
   output(states, args.flags.format, (data) => {
-    const feeds = data as typeof states;
-    if (feeds.length === 0) return "No feeds registered. Use 'feeds add <url>' to get started.";
+    if (data.length === 0) return "No feeds registered. Use 'feeds add <url>' to get started.";
 
     return formatTable(
       ["NAME", "STATUS", "SOURCES", "LAST SCAN", "ERRORS"],
-      feeds.map((f) => [
+      data.map((f) => [
         f.name,
         f.status,
         String(f.sourceCount),
