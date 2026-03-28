@@ -970,6 +970,9 @@ export class FeedDatabase implements Disposable {
 
   getArticleByOccurrenceId(id: string): Article | null {
     const isPrefix = id.length < 36;
+    const escapedId = isPrefix
+      ? id.replace(/[%_]/g, (ch) => `\\${ch}`)
+      : id;
     const rows = this.sqlite
       .query(
         `SELECT
@@ -994,9 +997,9 @@ export class FeedDatabase implements Disposable {
          FROM article_occurrences ao
          JOIN canonical_articles c ON c.id = ao.canonical_article_id
          LEFT JOIN article_states s ON s.canonical_article_id = c.id
-         WHERE ${isPrefix ? "ao.id LIKE ? || '%'" : "ao.id = ?"}`,
+         WHERE ${isPrefix ? "ao.id LIKE ? || '%' ESCAPE '\\'" : "ao.id = ?"}`,
       )
-      .all(id) as ArticleListRow[];
+      .all(escapedId) as ArticleListRow[];
 
     if (isPrefix && rows.length > 1) {
       throw new Error(`Ambiguous ID prefix "${id}" matches ${rows.length} articles. Use a longer prefix.`);

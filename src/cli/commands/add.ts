@@ -2,7 +2,7 @@ import type { ParsedArgs } from "../args.ts";
 import { UsageError } from "../args.ts";
 import { output, outputInfo } from "../output.ts";
 import { resolvePaths, ensureDir } from "../../paths.ts";
-import { addFeedToConfig, normalizeFeedDefinition } from "../../config/index.ts";
+import { loadConfig, saveConfig, normalizeFeedDefinition } from "../../config/index.ts";
 import { FeedDatabase } from "../../db/index.ts";
 import { fetchFeed, detectFeedFormat } from "../../parser/index.ts";
 import type { FeedDefinition, SourceKind } from "../../types.ts";
@@ -41,10 +41,16 @@ export async function addCommand(args: ParsedArgs): Promise<void> {
     sources: [{ name, kind, url }],
   });
 
-  await addFeedToConfig(paths.config, feedDef);
+  const config = await loadConfig(paths.config);
+  if (config.feeds.some((f) => f.name === feedDef.name)) {
+    throw new Error(`Feed "${feedDef.name}" already exists`);
+  }
 
   using db = new FeedDatabase(paths.db);
   const state = db.upsertFeedFromConfig(feedDef);
+
+  config.feeds.push(feedDef);
+  await saveConfig(paths.config, config);
 
   output(state, args.flags.format, () => `Added feed: ${name} (${kind}, ${url})`);
 }
