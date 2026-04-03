@@ -7,6 +7,14 @@ import type {
   FeedSourceDefinition,
 } from "../types";
 
+// ── Helpers ──
+
+function normalizeDate(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 // ── Types ──
 
 export type { ParsedArticle };
@@ -62,7 +70,7 @@ function normalizeRssItems(items: Rss.Item<string>[]): ParseFeedResult {
           mimeType: e.type,
           sizeInBytes: e.length,
         })).filter((a) => a.url) ?? [],
-      publishedAt: item.pubDate ?? null,
+      publishedAt: normalizeDate(item.pubDate),
       updatedAt: null,
       language: null,
       sourceFormat: "rss",
@@ -112,8 +120,8 @@ function normalizeAtomEntries(
         })).filter((a) => a.name) ?? [],
       categories: entry.categories?.map((c) => c.term ?? "").filter(Boolean) ?? [],
       attachments: enclosures,
-      publishedAt: entry.published ?? null,
-      updatedAt: entry.updated ?? null,
+      publishedAt: normalizeDate(entry.published),
+      updatedAt: normalizeDate(entry.updated),
       language: null,
       sourceFormat: "atom",
     });
@@ -165,8 +173,8 @@ function normalizeJsonItems(items: Json.Item<string>[]): ParseFeedResult {
           sizeInBytes: a.size_in_bytes,
           durationInSeconds: a.duration_in_seconds,
         })).filter((a) => a.url) ?? [],
-      publishedAt: item.date_published ?? null,
-      updatedAt: item.date_modified ?? null,
+      publishedAt: normalizeDate(item.date_published),
+      updatedAt: normalizeDate(item.date_modified),
       language: item.language ?? null,
       sourceFormat: "json",
     });
@@ -196,7 +204,7 @@ function normalizeRdfItems(items: Rdf.Item<string>[]): ParseFeedResult {
       authors: item.dc?.creators?.map((c) => ({ name: c })) ?? [],
       categories: item.dc?.subjects ?? [],
       attachments: [],
-      publishedAt: item.dc?.dates?.[0] ?? null,
+      publishedAt: normalizeDate(item.dc?.dates?.[0]),
       updatedAt: null,
       language: item.dc?.languages?.[0] ?? null,
       sourceFormat: "rdf",

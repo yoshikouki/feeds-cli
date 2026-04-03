@@ -157,7 +157,7 @@ describe("parseFeedContent", () => {
       expect(a.externalId).toBe("https://example.com/post-1");
       expect(a.summary).toBe("Short description");
       expect(a.content).toBe("<p>Full content here</p>");
-      expect(a.publishedAt).toBe("Wed, 01 Jan 2025 00:00:00 GMT");
+      expect(a.publishedAt).toBe("2025-01-01T00:00:00.000Z");
       expect(a.sourceFormat).toBe("rss");
       expect(a.updatedAt).toBeNull();
     });
@@ -222,8 +222,8 @@ describe("parseFeedContent", () => {
       expect(a.externalId).toBe("urn:uuid:entry-1");
       expect(a.summary).toBe("Summary text");
       expect(a.content).toBe("<p>Full atom content</p>");
-      expect(a.publishedAt).toBe("2025-01-01T12:00:00Z");
-      expect(a.updatedAt).toBe("2025-01-02T00:00:00Z");
+      expect(a.publishedAt).toBe("2025-01-01T12:00:00.000Z");
+      expect(a.updatedAt).toBe("2025-01-02T00:00:00.000Z");
       expect(a.sourceFormat).toBe("atom");
     });
 
@@ -276,8 +276,8 @@ describe("parseFeedContent", () => {
       expect(a.externalId).toBe("json-1");
       expect(a.summary).toBe("A summary");
       expect(a.content).toBe("<p>HTML content</p>");
-      expect(a.publishedAt).toBe("2025-01-01T00:00:00Z");
-      expect(a.updatedAt).toBe("2025-01-02T00:00:00Z");
+      expect(a.publishedAt).toBe("2025-01-01T00:00:00.000Z");
+      expect(a.updatedAt).toBe("2025-01-02T00:00:00.000Z");
       expect(a.language).toBe("en");
       expect(a.sourceFormat).toBe("json");
     });
