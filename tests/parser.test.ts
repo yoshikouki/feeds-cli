@@ -324,6 +324,57 @@ describe("parseFeedContent", () => {
     });
   });
 
+  describe("date normalization", () => {
+    test("converts RFC 2822 dates to ISO 8601", () => {
+      const rss = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>Test</title><link>https://example.com</link><description>Test</description>
+    <item>
+      <title>RFC 2822</title>
+      <link>https://example.com/1</link>
+      <pubDate>Thu, 03 Apr 2025 14:30:00 +0900</pubDate>
+    </item>
+  </channel>
+</rss>`;
+      const { articles } = parseFeedContent(rss);
+      expect(articles[0].publishedAt).toBe("2025-04-03T05:30:00.000Z");
+    });
+
+    test("normalizes ISO 8601 without milliseconds", () => {
+      const atom = `<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Test</title>
+  <entry>
+    <title>ISO no ms</title>
+    <id>urn:1</id>
+    <link href="https://example.com/1"/>
+    <published>2025-06-15T08:00:00Z</published>
+    <updated>2025-06-16T09:00:00Z</updated>
+  </entry>
+</feed>`;
+      const { articles } = parseFeedContent(atom);
+      expect(articles[0].publishedAt).toBe("2025-06-15T08:00:00.000Z");
+      expect(articles[0].updatedAt).toBe("2025-06-16T09:00:00.000Z");
+    });
+
+    test("returns null for unparseable dates", () => {
+      const rss = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>Test</title><link>https://example.com</link><description>Test</description>
+    <item>
+      <title>Bad date</title>
+      <link>https://example.com/1</link>
+      <pubDate>not-a-date</pubDate>
+    </item>
+  </channel>
+</rss>`;
+      const { articles } = parseFeedContent(rss);
+      expect(articles[0].publishedAt).toBeNull();
+    });
+  });
+
   describe("edge cases", () => {
     test("throws on unparseable content", () => {
       expect(() => parseFeedContent("not a feed")).toThrow();
