@@ -5,7 +5,7 @@ import { FeedDatabase } from "../../db/index.ts";
 
 export async function listCommand(args: ParsedArgs): Promise<void> {
   const paths = resolvePaths(args.flags);
-  await ensureDir(paths.dataDir);
+  await ensureDir(paths.base);
 
   using db = new FeedDatabase(paths.db);
   const articles = db.listArticles({

@@ -9,7 +9,7 @@ export async function readCommand(args: ParsedArgs): Promise<void> {
   if (!id) throw new UsageError("Usage: feeds read <id>");
 
   const paths = resolvePaths(args.flags);
-  await ensureDir(paths.dataDir);
+  await ensureDir(paths.base);
 
   using db = new FeedDatabase(paths.db);
   const article = db.getArticleByOccurrenceId(id);

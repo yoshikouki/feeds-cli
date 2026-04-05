@@ -10,7 +10,7 @@ export async function removeCommand(args: ParsedArgs): Promise<void> {
   if (!name) throw new UsageError("Usage: feeds remove <name>");
 
   const paths = resolvePaths(args.flags);
-  await ensureDir(paths.dataDir);
+  await ensureDir(paths.base);
 
   using db = new FeedDatabase(paths.db);
   db.removeFeed(name);

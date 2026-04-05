@@ -5,7 +5,7 @@ import { FeedDatabase } from "../../db/index.ts";
 
 export async function feedsCommand(args: ParsedArgs): Promise<void> {
   const paths = resolvePaths(args.flags);
-  await ensureDir(paths.dataDir);
+  await ensureDir(paths.base);
 
   using db = new FeedDatabase(paths.db);
   const states = db.listFeedStates();

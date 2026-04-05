@@ -22,8 +22,7 @@ export async function addCommand(args: ParsedArgs): Promise<void> {
   }
 
   const paths = resolvePaths(args.flags);
-  await ensureDir(paths.configDir);
-  await ensureDir(paths.dataDir);
+  await ensureDir(paths.base);
 
   outputInfo(`Fetching ${url} ...`);
   const raw = await fetchFeed(url);
