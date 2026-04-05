@@ -3,11 +3,11 @@ import { UsageError } from "../args.ts";
 import { outputText } from "../output.ts";
 import { resolvePaths } from "../../paths.ts";
 import {
-  parseInterval,
+  intervalToCron,
   runCycle,
-  daemonStart,
-  daemonStop,
-  daemonStatus,
+  cronStart,
+  cronStop,
+  cronNextRun,
 } from "../../cron/index.ts";
 
 const DEFAULT_INTERVAL = "30m";
@@ -15,10 +15,9 @@ const DEFAULT_INTERVAL = "30m";
 const CRON_HELP = `feeds cron — scheduled feed scanning
 
 Usage:
-  feeds cron start [--interval 30m]   Start daemon
-  feeds cron stop                     Stop daemon
-  feeds cron status                   Show daemon status
-  feeds cron run                     Run one scan cycle (foreground)`;
+  feeds cron start [--interval 30m]   Register OS cron job
+  feeds cron stop                     Remove OS cron job
+  feeds cron run                      Run one scan cycle (foreground)`;
 
 export async function cronCommand(args: ParsedArgs): Promise<void> {
   const subcommand = args.positionals[0];
@@ -28,24 +27,22 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
     return;
   }
 
-  const paths = resolvePaths(args.flags);
-  const intervalStr = args.flags.interval ?? DEFAULT_INTERVAL;
-
   switch (subcommand) {
     case "start": {
-      const intervalMs = parseInterval(intervalStr);
-      await daemonStart(paths, intervalMs);
+      const intervalStr = args.flags.interval ?? DEFAULT_INTERVAL;
+      const schedule = intervalToCron(intervalStr);
+      await cronStart(schedule);
+      const next = cronNextRun(schedule);
+      if (next) {
+        outputText(`Next run: ${next.toISOString()}`);
+      }
       break;
     }
     case "stop":
-      await daemonStop(paths);
+      await cronStop();
       break;
-    case "status": {
-      const status = await daemonStatus(paths);
-      outputText(status);
-      break;
-    }
     case "run": {
+      const paths = resolvePaths(args.flags);
       await runCycle(paths);
       break;
     }

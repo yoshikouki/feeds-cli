@@ -13,8 +13,6 @@ describe("resolvePaths", () => {
     expect(paths.config).toBe(join(base, "feeds.json5"));
     expect(paths.db).toBe(join(base, "feeds.db"));
     expect(paths.hooksDir).toBe(join(base, "hooks", "cron"));
-    expect(paths.logFile).toBe(join(base, "logs", "cron.log"));
-    expect(paths.pidFile).toBe(join(base, "cron.pid"));
   });
 
   test("CLI flags override config path", () => {

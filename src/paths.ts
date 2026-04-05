@@ -7,8 +7,6 @@ export interface ResolvedPaths {
   config: string;
   db: string;
   hooksDir: string;
-  logFile: string;
-  pidFile: string;
 }
 
 /**
@@ -25,8 +23,6 @@ export function resolvePaths(flags?: {
     config: flags?.config ?? join(base, "feeds.json5"),
     db: flags?.db ?? join(base, "feeds.db"),
     hooksDir: join(base, "hooks", "cron"),
-    logFile: join(base, "logs", "cron.log"),
-    pidFile: join(base, "cron.pid"),
   };
 }
 

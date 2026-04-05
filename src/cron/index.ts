@@ -1,26 +1,29 @@
-import { dirname } from "node:path";
+import { join, dirname } from "node:path";
 import { outputInfo, outputWarn, outputError } from "../cli/output.ts";
 import { loadConfig } from "../config/index.ts";
 import { FeedDatabase } from "../db/index.ts";
 import { scanFeed, type ScanResult } from "../scanner.ts";
-import { ensureDir, type ResolvedPaths } from "../paths.ts";
+import { type ResolvedPaths } from "../paths.ts";
 import { runHooks } from "./hooks.ts";
 
+const CRON_JOB_TITLE = "feeds-cli";
+const WORKER_PATH = join(dirname(import.meta.filename), "worker.ts");
+
 /**
- * Parse an interval string like "30m", "1h", "90s" into milliseconds.
+ * Convert an interval string like "30m", "1h" to a cron expression.
  */
-export function parseInterval(input: string): number {
-  const match = input.match(/^(\d+)(s|m|h)$/);
-  if (!match) throw new Error(`Invalid interval: ${input} (use e.g. 30m, 1h, 90s)`);
+export function intervalToCron(input: string): string {
+  const match = input.match(/^(\d+)(m|h)$/);
+  if (!match) throw new Error(`Invalid interval: ${input} (use e.g. 30m, 1h)`);
   const value = Number(match[1]);
   const unit = match[2];
   switch (unit) {
-    case "s":
-      return value * 1_000;
     case "m":
-      return value * 60_000;
+      if (value > 0 && 60 % value === 0) return `*/${value} * * * *`;
+      return `*/${value} * * * *`;
     case "h":
-      return value * 3_600_000;
+      if (value === 1) return `0 * * * *`;
+      return `0 */${value} * * *`;
     default:
       throw new Error(`Invalid interval unit: ${unit}`);
   }
@@ -111,137 +114,18 @@ export async function runCycle(paths: ResolvedPaths): Promise<void> {
   outputInfo(`Cycle complete: ${totalNew} new articles in ${durationMs}ms`);
 }
 
-/**
- * Start the cron loop (foreground). Used by the daemon process.
- */
-export async function startLoop(
-  paths: ResolvedPaths,
-  intervalMs: number,
-): Promise<void> {
-  outputInfo(
-    `feeds-cli cron started (interval: ${intervalMs / 1000}s, PID: ${process.pid})`,
-  );
+// ─── Cron job management via Bun.cron() ───
 
-  // Run immediately on start
-  await runCycle(paths);
-
-  const timer = setInterval(async () => {
-    try {
-      await runCycle(paths);
-    } catch (err) {
-      outputError(
-        `Cycle error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, intervalMs);
-
-  // Graceful shutdown
-  const shutdown = () => {
-    outputInfo("Shutting down feeds-cli cron...");
-    clearInterval(timer);
-    process.exit(0);
-  };
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+export async function cronStart(schedule: string): Promise<void> {
+  await Bun.cron(WORKER_PATH, schedule, CRON_JOB_TITLE);
+  outputInfo(`Cron registered: "${schedule}" (${CRON_JOB_TITLE})`);
 }
 
-// ─── Daemon management ───
-
-async function readPid(pidFile: string): Promise<number | null> {
-  try {
-    const content = await Bun.file(pidFile).text();
-    return Number(content.trim()) || null;
-  } catch {
-    return null;
-  }
+export async function cronStop(): Promise<void> {
+  await Bun.cron.remove(CRON_JOB_TITLE);
+  outputInfo("Cron job removed.");
 }
 
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function daemonStart(
-  paths: ResolvedPaths,
-  intervalMs: number,
-): Promise<void> {
-  await ensureDir(paths.base);
-  await ensureDir(dirname(paths.logFile));
-
-  const existingPid = await readPid(paths.pidFile);
-  if (existingPid && isProcessRunning(existingPid)) {
-    outputError(`Cron daemon already running (PID ${existingPid})`);
-    process.exit(1);
-  }
-
-  // Spawn self as detached daemon with log output
-  const logFile = Bun.file(paths.logFile);
-  const proc = Bun.spawn(
-    [process.execPath, import.meta.filename, "__daemon", String(intervalMs), paths.config, paths.db],
-    {
-      detached: true,
-      stdin: "ignore",
-      stdout: logFile,
-      stderr: logFile,
-    },
-  );
-  proc.unref();
-
-  await Bun.write(paths.pidFile, String(proc.pid));
-  outputInfo(`Cron daemon started (PID ${proc.pid})`);
-}
-
-export async function daemonStop(paths: ResolvedPaths): Promise<void> {
-  const pid = await readPid(paths.pidFile);
-  if (!pid || !isProcessRunning(pid)) {
-    outputInfo("Cron daemon is not running.");
-    await cleanPidFile(paths.pidFile);
-    return;
-  }
-
-  process.kill(pid, "SIGTERM");
-  await cleanPidFile(paths.pidFile);
-  outputInfo(`Cron daemon stopped (PID ${pid})`);
-}
-
-export async function daemonStatus(paths: ResolvedPaths): Promise<string> {
-  const pid = await readPid(paths.pidFile);
-  if (!pid || !isProcessRunning(pid)) {
-    await cleanPidFile(paths.pidFile);
-    return "feeds cron: not running";
-  }
-  return `feeds cron: running (PID ${pid})`;
-}
-
-async function cleanPidFile(pidFile: string): Promise<void> {
-  try {
-    const { unlink } = await import("node:fs/promises");
-    await unlink(pidFile);
-  } catch {
-    // ignore
-  }
-}
-
-// ─── Daemon entry point ───
-// When invoked as `bun src/cron/index.ts __daemon <intervalMs> [configOverride] [dbOverride]`
-
-if (import.meta.main) {
-  const args = process.argv.slice(2);
-  if (args[0] === "__daemon") {
-    const intervalMs = Number(args[1]);
-    const configOverride = args[2] !== "undefined" ? args[2] : undefined;
-    const dbOverride = args[3] !== "undefined" ? args[3] : undefined;
-
-    const { resolvePaths: resolve } = await import("../paths.ts");
-    const paths = resolve({ config: configOverride, db: dbOverride });
-
-    // Redirect output to log file
-    await ensureDir(dirname(paths.logFile));
-
-    await startLoop(paths, intervalMs);
-  }
+export function cronNextRun(schedule: string): Date | null {
+  return Bun.cron.parse(schedule);
 }

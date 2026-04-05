@@ -68,10 +68,10 @@ All files live under `~/.feeds-cli/`:
 ~/.feeds-cli/
 ├── feeds.json5       # Config
 ├── feeds.db          # SQLite database
-├── cron.pid          # Daemon PID file
-├── hooks/cron/       # Hook scripts (on-{event}.{ext})
-└── logs/cron.log     # Daemon log output
+└── hooks/cron/       # Hook scripts (on-{event}.{ext})
 ```
+
+Cron scheduling uses `Bun.cron()` (OS-level: launchd on macOS, crontab on Linux).
 
 CLI flags `--config`/`--db` override individual file paths.
 

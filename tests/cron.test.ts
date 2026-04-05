@@ -1,23 +1,24 @@
 import { describe, test, expect } from "bun:test";
-import { parseInterval } from "../src/cron/index";
+import { intervalToCron } from "../src/cron/index";
 
-describe("parseInterval", () => {
-  test("parses seconds", () => {
-    expect(parseInterval("90s")).toBe(90_000);
+describe("intervalToCron", () => {
+  test("converts minutes to cron expression", () => {
+    expect(intervalToCron("15m")).toBe("*/15 * * * *");
+    expect(intervalToCron("30m")).toBe("*/30 * * * *");
+    expect(intervalToCron("5m")).toBe("*/5 * * * *");
   });
 
-  test("parses minutes", () => {
-    expect(parseInterval("30m")).toBe(30 * 60_000);
-  });
-
-  test("parses hours", () => {
-    expect(parseInterval("2h")).toBe(2 * 3_600_000);
+  test("converts hours to cron expression", () => {
+    expect(intervalToCron("1h")).toBe("0 * * * *");
+    expect(intervalToCron("2h")).toBe("0 */2 * * *");
+    expect(intervalToCron("6h")).toBe("0 */6 * * *");
   });
 
   test("rejects invalid format", () => {
-    expect(() => parseInterval("abc")).toThrow("Invalid interval");
-    expect(() => parseInterval("30")).toThrow("Invalid interval");
-    expect(() => parseInterval("30d")).toThrow("Invalid interval");
-    expect(() => parseInterval("")).toThrow("Invalid interval");
+    expect(() => intervalToCron("abc")).toThrow("Invalid interval");
+    expect(() => intervalToCron("30")).toThrow("Invalid interval");
+    expect(() => intervalToCron("30s")).toThrow("Invalid interval");
+    expect(() => intervalToCron("30d")).toThrow("Invalid interval");
+    expect(() => intervalToCron("")).toThrow("Invalid interval");
   });
 });
