@@ -1,12 +1,13 @@
 import type { ParsedArgs } from "../args.ts";
 import { UsageError } from "../args.ts";
-import { outputText } from "../output.ts";
+import { output, outputText } from "../output.ts";
 import { resolvePaths } from "../../paths.ts";
 import {
   intervalToCron,
   runCycle,
   cronStart,
   cronStop,
+  cronStatus,
   cronNextRun,
 } from "../../cron/index.ts";
 
@@ -17,6 +18,7 @@ const CRON_HELP = `feeds cron — scheduled feed scanning
 Usage:
   feeds cron start [--interval 30m]   Register OS cron job
   feeds cron stop                     Remove OS cron job
+  feeds cron status                   Show cron job status
   feeds cron run                      Run one scan cycle (foreground)`;
 
 export async function cronCommand(args: ParsedArgs): Promise<void> {
@@ -41,6 +43,17 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
     case "stop":
       await cronStop();
       break;
+    case "status": {
+      const status = await cronStatus();
+      output(status, args.flags.format, (s) => {
+        if (!s.registered) return "feeds cron: not registered";
+        const lines = ["feeds cron: registered"];
+        if (s.schedule) lines.push(`  schedule:  ${s.schedule}`);
+        if (s.nextRun) lines.push(`  next run:  ${s.nextRun.toISOString()}`);
+        return lines.join("\n");
+      });
+      break;
+    }
     case "run": {
       const paths = resolvePaths(args.flags);
       await runCycle(paths);

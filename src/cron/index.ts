@@ -129,3 +129,84 @@ export async function cronStop(): Promise<void> {
 export function cronNextRun(schedule: string): Date | null {
   return Bun.cron.parse(schedule);
 }
+
+export interface CronStatus {
+  registered: boolean;
+  schedule: string | null;
+  nextRun: Date | null;
+}
+
+export async function cronStatus(): Promise<CronStatus> {
+  const platform = process.platform;
+
+  if (platform === "darwin") {
+    return await cronStatusMacOS();
+  }
+  if (platform === "linux") {
+    return await cronStatusLinux();
+  }
+
+  return { registered: false, schedule: null, nextRun: null };
+}
+
+async function cronStatusMacOS(): Promise<CronStatus> {
+  // Bun.cron registers as ~/Library/LaunchAgents/bun.cron.<title>.plist
+  const plistPath = `${process.env.HOME}/Library/LaunchAgents/bun.cron.${CRON_JOB_TITLE}.plist`;
+  const exists = await Bun.file(plistPath).exists();
+  if (!exists) {
+    return { registered: false, schedule: null, nextRun: null };
+  }
+
+  // Check if loaded in launchctl
+  const proc = Bun.spawn(["launchctl", "list"], {
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const output = await new Response(proc.stdout).text();
+  const registered = output.includes(`bun.cron.${CRON_JOB_TITLE}`);
+
+  // Extract schedule from plist to compute next run
+  const schedule = await extractScheduleFromPlist(plistPath);
+  const nextRun = schedule ? Bun.cron.parse(schedule) : null;
+
+  return { registered, schedule, nextRun };
+}
+
+async function extractScheduleFromPlist(plistPath: string): Promise<string | null> {
+  try {
+    const content = await Bun.file(plistPath).text();
+    // Bun embeds the cron expression in the ProgramArguments as --cron-period='<schedule>'
+    const match = content.match(/--cron-period='([^']+)'/);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function cronStatusLinux(): Promise<CronStatus> {
+  // Bun.cron adds entries with "# bun-cron: <title>" marker
+  const proc = Bun.spawn(["crontab", "-l"], {
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const output = await new Response(proc.stdout).text();
+  const lines = output.split("\n");
+
+  let foundMarker = false;
+  for (const line of lines) {
+    if (line.trim() === `# bun-cron: ${CRON_JOB_TITLE}`) {
+      foundMarker = true;
+      continue;
+    }
+    if (foundMarker && line.trim()) {
+      // The line after the marker is the crontab entry
+      // Format: <schedule fields> '<bun-path>' run --cron-title=... --cron-period='<schedule>' '<script>'
+      const periodMatch = line.match(/--cron-period='([^']+)'/);
+      const schedule = periodMatch?.[1] ?? null;
+      const nextRun = schedule ? Bun.cron.parse(schedule) : null;
+      return { registered: true, schedule, nextRun };
+    }
+  }
+
+  return { registered: false, schedule: null, nextRun: null };
+}
