@@ -33,13 +33,17 @@ bun test tests/db.test.ts  # Run a single test file
 ```
 src/
 ├── types.ts          # All shared types (zero imports): Config, Domain, DB
-├── paths.ts          # XDG path resolution (config + data dirs)
+├── paths.ts          # ~/.feeds-cli/ path resolution
+├── scanner.ts        # Shared scan logic (used by scan command + cron)
 ├── config/
 │   └── index.ts      # JSON5 config I/O (Bun.JSON5)
 ├── parser/
 │   └── index.ts      # Feed parser (feedsmith v3) — no db dependency
-└── db/
-    └── index.ts      # SQLite layer (bun:sqlite, Disposable, FTS5)
+├── db/
+│   └── index.ts      # SQLite layer (bun:sqlite, Disposable, FTS5)
+└── cron/
+    ├── index.ts      # Cron loop, daemon management (start/stop/status)
+    └── hooks.ts      # Hook discovery & execution engine
 ```
 
 ### Type Hierarchy
@@ -56,11 +60,20 @@ DB layer (InsertArticleInput → SQLite)
 - Parser imports only from `types.ts` (never from `db`)
 - DB imports only from `types.ts`
 
-### Data Locations (XDG Base Directory Spec)
+### Data Locations
 
-- **Config**: `$XDG_CONFIG_HOME/feeds-cli/feeds.json5` (default `~/.config/feeds-cli/`)
-- **Data**: `$XDG_DATA_HOME/feeds-cli/feeds.db` (default `~/.local/share/feeds-cli/`)
-- CLI flags `--config`/`--db` override individual file paths
+All files live under `~/.feeds-cli/`:
+
+```
+~/.feeds-cli/
+├── feeds.json5       # Config
+├── feeds.db          # SQLite database
+├── cron.pid          # Daemon PID file
+├── hooks/cron/       # Hook scripts (on-{event}.{ext})
+└── logs/cron.log     # Daemon log output
+```
+
+CLI flags `--config`/`--db` override individual file paths.
 
 ### Key Design Patterns
 

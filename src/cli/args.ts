@@ -17,6 +17,7 @@ export interface ParsedArgs {
     search?: string;
     since?: string;
     tag?: string;
+    interval?: string;
   };
 }
 
@@ -39,6 +40,7 @@ const FLAGS_WITH_VALUE = new Set([
   "--search",
   "--since",
   "--tag",
+  "--interval",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -108,6 +110,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
           break;
         case "tag":
           result.flags.tag = value;
+          break;
+        case "interval":
+          result.flags.interval = value;
           break;
       }
     } else if (token.startsWith("-")) {
