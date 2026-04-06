@@ -29,6 +29,7 @@ export interface NewArticle {
 export async function scanFeed(
   db: FeedDatabase,
   feedDef: FeedDefinition,
+  cycleId?: string,
 ): Promise<ScanResult> {
   const feedState = db.upsertFeedFromConfig(feedDef);
   const dbSources = db.listFeedSources(feedState.id);
@@ -44,7 +45,12 @@ export async function scanFeed(
 
   for (const sourceDef of feedDef.sources) {
     const dbSource = dbSources.find((s) => s.id === sourceDef.id);
-    if (!dbSource) continue;
+    if (!dbSource) {
+      result.errors.push(
+        `Source "${sourceDef.name ?? sourceDef.url}" has no matching DB row`,
+      );
+      continue;
+    }
 
     outputInfo(`Scanning: ${sourceDef.name ?? sourceDef.url}`);
     const startTime = performance.now();
@@ -60,7 +66,7 @@ export async function scanFeed(
 
     if (error) {
       result.errors.push(`${sourceDef.name}: ${error}`);
-      db.markSourceScanError(dbSource.id, scannedAt, error, durationMs);
+      db.markSourceScanError(dbSource.id, scannedAt, error, durationMs, cycleId);
       continue;
     }
 
@@ -98,6 +104,7 @@ export async function scanFeed(
       lastArticleAt,
       articles.length,
       durationMs,
+      cycleId,
     );
   }
 

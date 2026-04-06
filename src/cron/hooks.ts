@@ -8,6 +8,12 @@ export interface HookContext {
   stdin?: string;
 }
 
+export interface HookResult {
+  hookPath: string;
+  exitCode: number | null;
+  error: string | null;
+}
+
 /**
  * Discover hook files matching `on-{event}.*` in the hooks directory.
  * Returns executable files sorted by name.
@@ -41,13 +47,16 @@ export async function discoverHooks(
 /**
  * Run all hooks for a given event.
  * Non-zero exits produce a warning but don't throw.
+ * Returns results for each hook executed.
  */
 export async function runHooks(
   hooksDir: string,
   context: HookContext,
-): Promise<void> {
+): Promise<HookResult[]> {
   const hooks = await discoverHooks(hooksDir, context.event);
-  if (hooks.length === 0) return;
+  if (hooks.length === 0) return [];
+
+  const results: HookResult[] = [];
 
   for (const hookPath of hooks) {
     outputInfo(`Running hook: ${hookPath}`);
@@ -62,10 +71,13 @@ export async function runHooks(
       if (exitCode !== 0) {
         outputWarn(`Hook exited with code ${exitCode}: ${hookPath}`);
       }
+      results.push({ hookPath, exitCode, error: null });
     } catch (err) {
-      outputWarn(
-        `Hook failed: ${hookPath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      outputWarn(`Hook failed: ${hookPath}: ${message}`);
+      results.push({ hookPath, exitCode: null, error: message });
     }
   }
+
+  return results;
 }
