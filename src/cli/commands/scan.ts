@@ -5,6 +5,7 @@ import { resolvePaths, ensureDir } from "../../paths.ts";
 import { loadConfig } from "../../config/index.ts";
 import { FeedDatabase } from "../../db/index.ts";
 import { scanFeed, type ScanResult } from "../../scanner.ts";
+import { runCycle } from "../../cron/index.ts";
 
 export async function scanCommand(args: ParsedArgs): Promise<void> {
   const feedName = args.positionals[0];
@@ -15,15 +16,18 @@ export async function scanCommand(args: ParsedArgs): Promise<void> {
   const paths = resolvePaths(args.flags);
   await ensureDir(paths.base);
 
+  // --all: delegate to runCycle for unified cycle_log recording
+  if (!feedName) {
+    await runCycle(paths, "manual");
+    return;
+  }
+
   const config = await loadConfig(paths.config);
   if (config.feeds.length === 0) {
     throw new Error("No feeds in config. Use 'feeds add <url>' first.");
   }
 
-  const feedDefs = feedName
-    ? config.feeds.filter((f) => f.name === feedName)
-    : config.feeds;
-
+  const feedDefs = config.feeds.filter((f) => f.name === feedName);
   if (feedDefs.length === 0) {
     throw new Error(`Feed not found in config: ${feedName}`);
   }

@@ -5,6 +5,7 @@ import { FeedDatabase } from "../db/index.ts";
 import { scanFeed, type ScanResult } from "../scanner.ts";
 import { type ResolvedPaths } from "../paths.ts";
 import { runHooks } from "./hooks.ts";
+import type { CycleTrigger } from "../types.ts";
 
 const CRON_JOB_TITLE = "feeds-cli";
 const WORKER_PATH = join(dirname(import.meta.filename), "worker.ts");
@@ -31,8 +32,12 @@ export function intervalToCron(input: string): string {
 
 /**
  * Run a single scan cycle over all feeds, firing hooks at each stage.
+ * Records execution in cycle_log (write-at-start, update-at-end).
  */
-export async function runCycle(paths: ResolvedPaths): Promise<void> {
+export async function runCycle(
+  paths: ResolvedPaths,
+  trigger: CycleTrigger = "manual",
+): Promise<void> {
   const cycleStart = performance.now();
   const config = await loadConfig(paths.config);
 
@@ -42,76 +47,94 @@ export async function runCycle(paths: ResolvedPaths): Promise<void> {
   }
 
   using db = new FeedDatabase(paths.db);
+  const cycleId = db.insertCycleLog(trigger);
   let totalNew = 0;
+  let hasErrors = false;
 
-  for (const feedDef of config.feeds) {
-    const feedEnv = {
-      FEEDS_FEED_NAME: feedDef.name,
-      FEEDS_FEED_ID: feedDef.id ?? "",
-    };
+  try {
+    for (const feedDef of config.feeds) {
+      const feedEnv = {
+        FEEDS_FEED_NAME: feedDef.name,
+        FEEDS_FEED_ID: feedDef.id ?? "",
+      };
 
-    await runHooks(paths.hooksDir, {
-      event: "scan-start",
-      env: feedEnv,
-    });
-
-    let result: ScanResult;
-    try {
-      result = await scanFeed(db, feedDef);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      outputError(`Scan failed for ${feedDef.name}: ${message}`);
       await runHooks(paths.hooksDir, {
-        event: "scan-error",
-        env: { ...feedEnv, FEEDS_ERROR_MESSAGE: message },
+        event: "scan-start",
+        env: feedEnv,
       });
-      continue;
+
+      let result: ScanResult;
+      try {
+        result = await scanFeed(db, feedDef, cycleId);
+      } catch (err) {
+        hasErrors = true;
+        const message = err instanceof Error ? err.message : String(err);
+        outputError(`Scan failed for ${feedDef.name}: ${message}`);
+        await runHooks(paths.hooksDir, {
+          event: "scan-error",
+          env: { ...feedEnv, FEEDS_ERROR_MESSAGE: message },
+        });
+        continue;
+      }
+
+      await runHooks(paths.hooksDir, {
+        event: "scan-complete",
+        env: {
+          ...feedEnv,
+          FEEDS_ARTICLE_COUNT: String(result.articlesFound),
+          FEEDS_NEW_ARTICLE_COUNT: String(result.articlesInserted),
+        },
+      });
+
+      if (result.newArticles.length > 0) {
+        const json = JSON.stringify(result.newArticles);
+        await runHooks(paths.hooksDir, {
+          event: "new-articles",
+          env: {
+            ...feedEnv,
+            FEEDS_NEW_ARTICLES_JSON: json,
+          },
+          stdin: json,
+        });
+      }
+
+      totalNew += result.articlesInserted;
+      if (result.errors.length > 0) hasErrors = true;
+
+      for (const err of result.errors) {
+        outputWarn(err);
+      }
+
+      outputInfo(
+        `${result.feedName}: ${result.articlesInserted} new / ${result.articlesFound} found`,
+      );
     }
 
+    const durationMs = Math.round(performance.now() - cycleStart);
+    db.finishCycleLog(
+      cycleId,
+      hasErrors ? "error" : "success",
+      durationMs,
+    );
+
     await runHooks(paths.hooksDir, {
-      event: "scan-complete",
+      event: "cycle-complete",
       env: {
-        ...feedEnv,
-        FEEDS_ARTICLE_COUNT: String(result.articlesFound),
-        FEEDS_NEW_ARTICLE_COUNT: String(result.articlesInserted),
+        FEEDS_TOTAL_FEEDS: String(config.feeds.length),
+        FEEDS_TOTAL_NEW_ARTICLES: String(totalNew),
+        FEEDS_CYCLE_DURATION_MS: String(durationMs),
       },
     });
 
-    if (result.newArticles.length > 0) {
-      const json = JSON.stringify(result.newArticles);
-      await runHooks(paths.hooksDir, {
-        event: "new-articles",
-        env: {
-          ...feedEnv,
-          FEEDS_NEW_ARTICLES_JSON: json,
-        },
-        stdin: json,
-      });
-    }
+    db.pruneLogs();
 
-    totalNew += result.articlesInserted;
-
-    for (const err of result.errors) {
-      outputWarn(err);
-    }
-
-    outputInfo(
-      `${result.feedName}: ${result.articlesInserted} new / ${result.articlesFound} found`,
-    );
+    outputInfo(`Cycle complete: ${totalNew} new articles in ${durationMs}ms`);
+  } catch (err) {
+    const durationMs = Math.round(performance.now() - cycleStart);
+    const message = err instanceof Error ? err.message : String(err);
+    db.finishCycleLog(cycleId, "error", durationMs, message);
+    throw err;
   }
-
-  const durationMs = Math.round(performance.now() - cycleStart);
-
-  await runHooks(paths.hooksDir, {
-    event: "cycle-complete",
-    env: {
-      FEEDS_TOTAL_FEEDS: String(config.feeds.length),
-      FEEDS_TOTAL_NEW_ARTICLES: String(totalNew),
-      FEEDS_CYCLE_DURATION_MS: String(durationMs),
-    },
-  });
-
-  outputInfo(`Cycle complete: ${totalNew} new articles in ${durationMs}ms`);
 }
 
 // ─── Cron job management via Bun.cron() ───
