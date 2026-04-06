@@ -253,7 +253,23 @@ export const articleStates = sqliteTable("article_states", {
   updatedAt: text("updated_at").notNull(),
 });
 
-// ─── Scan Log (P2) ───
+// ─── Cycle Log ───
+
+export const cycleLog = sqliteTable(
+  "cycle_log",
+  {
+    id: text("id").primaryKey(),
+    triggeredBy: text("triggered_by").notNull(),
+    status: text("status").notNull(),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
+    durationMs: integer("duration_ms"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [index("cycle_log_started_at_idx").on(table.startedAt)],
+);
+
+// ─── Scan Log ───
 
 export const scanLog = sqliteTable(
   "scan_log",
@@ -262,6 +278,9 @@ export const scanLog = sqliteTable(
     feedSourceId: text("feed_source_id")
       .notNull()
       .references(() => feedSources.id, { onDelete: "cascade" }),
+    cycleId: text("cycle_id").references(() => cycleLog.id, {
+      onDelete: "set null",
+    }),
     scannedAt: text("scanned_at").notNull(),
     status: text("status").notNull(),
     articleCount: integer("article_count"),
@@ -271,5 +290,6 @@ export const scanLog = sqliteTable(
   (table) => [
     index("scan_log_source_idx").on(table.feedSourceId),
     index("scan_log_scanned_at_idx").on(table.scannedAt),
+    index("scan_log_cycle_idx").on(table.cycleId),
   ],
 );

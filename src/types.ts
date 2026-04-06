@@ -163,6 +163,22 @@ export interface ScanLogEntry {
   articleCount: number | null;
   errorMessage: string | null;
   durationMs: number | null;
+  cycleId: string | null;
+}
+
+// ─── Cycle Log ───
+
+export type CycleTrigger = "manual" | "cron";
+export type CycleStatus = "running" | "success" | "error";
+
+export interface CycleLogEntry {
+  id: string;
+  triggeredBy: CycleTrigger;
+  status: CycleStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  errorMessage: string | null;
 }
 
 export function createId(): string {
