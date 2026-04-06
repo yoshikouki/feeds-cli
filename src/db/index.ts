@@ -8,6 +8,9 @@ import type {
   Article,
   ArticleAttachment,
   ArticleAuthor,
+  CycleLogEntry,
+  CycleStatus,
+  CycleTrigger,
   FeedDefinition,
   FeedGroup,
   FeedSourceState,
@@ -27,6 +30,7 @@ import {
   articleStates,
   articleTags,
   canonicalArticles,
+  cycleLog,
   feedAliases,
   feedGroupMemberships,
   feedGroups,
@@ -123,6 +127,7 @@ export class FeedDatabase implements Disposable {
         feedSourceStates,
         feedSources,
         feedSourceTags,
+        cycleLog,
         scanLog,
       },
     });
@@ -360,6 +365,7 @@ export class FeedDatabase implements Disposable {
     lastArticleAt: string | null,
     articleCount?: number,
     durationMs?: number,
+    cycleId?: string,
   ): void {
     this.db
       .update(feedSourceStates)
@@ -378,6 +384,7 @@ export class FeedDatabase implements Disposable {
       .values({
         id: createId(),
         feedSourceId,
+        cycleId: cycleId ?? null,
         scannedAt,
         status: "success",
         articleCount: articleCount ?? null,
@@ -391,6 +398,7 @@ export class FeedDatabase implements Disposable {
     scannedAt: string,
     errorMessage: string,
     durationMs?: number,
+    cycleId?: string,
   ): void {
     const current = this.db
       .select()
@@ -423,6 +431,7 @@ export class FeedDatabase implements Disposable {
       .values({
         id: createId(),
         feedSourceId,
+        cycleId: cycleId ?? null,
         scannedAt,
         status: "error",
         errorMessage,
@@ -448,7 +457,151 @@ export class FeedDatabase implements Disposable {
       articleCount: row.articleCount,
       errorMessage: row.errorMessage,
       durationMs: row.durationMs,
+      cycleId: row.cycleId,
     }));
+  }
+
+  // ─── Cycle Log ───
+
+  insertCycleLog(triggeredBy: CycleTrigger): string {
+    const id = createId();
+    this.db
+      .insert(cycleLog)
+      .values({
+        id,
+        triggeredBy,
+        status: "running",
+        startedAt: new Date().toISOString(),
+      })
+      .run();
+    return id;
+  }
+
+  finishCycleLog(
+    cycleId: string,
+    status: "success" | "error",
+    durationMs: number,
+    errorMessage?: string,
+  ): void {
+    this.db
+      .update(cycleLog)
+      .set({
+        status,
+        finishedAt: new Date().toISOString(),
+        durationMs,
+        errorMessage: errorMessage ?? null,
+      })
+      .where(eq(cycleLog.id, cycleId))
+      .run();
+  }
+
+  listCycleLog(filters?: {
+    limit?: number;
+    since?: string;
+  }): CycleLogEntry[] {
+    const params: Array<string | number> = [];
+    const clauses: string[] = [];
+
+    if (filters?.since) {
+      clauses.push("started_at >= ?");
+      params.push(filters.since);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limit = filters?.limit ?? 20;
+
+    const rows = this.sqlite
+      .query(
+        `SELECT id, triggered_by, status, started_at, finished_at, duration_ms, error_message
+         FROM cycle_log
+         ${where}
+         ORDER BY started_at DESC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as Array<{
+      id: string;
+      triggered_by: string;
+      status: string;
+      started_at: string;
+      finished_at: string | null;
+      duration_ms: number | null;
+      error_message: string | null;
+    }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      triggeredBy: row.triggered_by as CycleTrigger,
+      status: row.status as CycleStatus,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+      durationMs: row.duration_ms,
+      errorMessage: row.error_message,
+    }));
+  }
+
+  listScanLogAll(filters?: {
+    feedName?: string;
+    limit?: number;
+    since?: string;
+  }): ScanLogEntry[] {
+    const params: Array<string | number> = [];
+    const clauses: string[] = [];
+    let join = "";
+
+    if (filters?.feedName) {
+      join =
+        "JOIN feed_sources fs ON fs.id = sl.feed_source_id JOIN feeds f ON f.id = fs.feed_id";
+      clauses.push("f.name = ?");
+      params.push(filters.feedName);
+    }
+
+    if (filters?.since) {
+      clauses.push("sl.scanned_at >= ?");
+      params.push(filters.since);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limit = filters?.limit ?? 20;
+
+    const rows = this.sqlite
+      .query(
+        `SELECT sl.id, sl.feed_source_id, sl.scanned_at, sl.status,
+                sl.article_count, sl.error_message, sl.duration_ms, sl.cycle_id
+         FROM scan_log sl
+         ${join}
+         ${where}
+         ORDER BY sl.scanned_at DESC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as Array<{
+      id: string;
+      feed_source_id: string;
+      scanned_at: string;
+      status: string;
+      article_count: number | null;
+      error_message: string | null;
+      duration_ms: number | null;
+      cycle_id: string | null;
+    }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      feedSourceId: row.feed_source_id,
+      scannedAt: row.scanned_at,
+      status: row.status as "success" | "error",
+      articleCount: row.article_count,
+      errorMessage: row.error_message,
+      durationMs: row.duration_ms,
+      cycleId: row.cycle_id,
+    }));
+  }
+
+  pruneLogs(retainDays: number = 90): void {
+    const cutoff = new Date(
+      Date.now() - retainDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    this.sqlite.run(`DELETE FROM scan_log WHERE scanned_at < ?`, [cutoff]);
+    this.sqlite.run(`DELETE FROM cycle_log WHERE started_at < ?`, [cutoff]);
   }
 
   // ─── Articles ───
