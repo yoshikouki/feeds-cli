@@ -8,6 +8,7 @@ import { feedsCommand } from "./cli/commands/feeds.ts";
 import { listCommand } from "./cli/commands/list.ts";
 import { readCommand } from "./cli/commands/read.ts";
 import { cronCommand } from "./cli/commands/cron.ts";
+import { logCommand } from "./cli/commands/log.ts";
 import { removeCommand } from "./cli/commands/remove.ts";
 import { scanCommand } from "./cli/commands/scan.ts";
 
@@ -21,6 +22,7 @@ const COMMANDS: Record<string, CommandFn> = {
   feeds: feedsCommand,
   remove: removeCommand,
   cron: cronCommand,
+  log: logCommand,
 };
 
 const HELP = `feeds-cli — UNIX-philosophy feed reader
@@ -35,6 +37,7 @@ Commands:
   feeds              List registered feeds
   remove <name>      Remove a feed
   cron <sub>         Scheduled scanning (start|stop|status|run)
+  log [cycles|scans] Show execution history
 
 Global options:
   --config <path>    Config file path
