@@ -81,6 +81,10 @@ export async function scanFeed(
       );
       const { inserted, id } = db.insertArticle(input);
       if (inserted) {
+        if (!id) {
+          throw new Error("insertArticle returned no id for a newly inserted article");
+        }
+
         result.articlesInserted++;
         result.newArticles.push({
           id,
