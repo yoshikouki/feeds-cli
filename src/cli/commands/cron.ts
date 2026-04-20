@@ -9,6 +9,7 @@ import {
   cronStop,
   cronStatus,
   cronNextRun,
+  prepareCyclePaths,
 } from "../../cron/index.ts";
 
 const DEFAULT_INTERVAL = "30m";
@@ -35,6 +36,11 @@ export function renderCronStatus(status: Awaited<ReturnType<typeof cronStatus>>)
   const lines = ["feeds cron: registered"];
   if (status.schedule) lines.push(`  schedule:      ${status.schedule}`);
   if (status.nextRun) lines.push(`  next run:      ${status.nextRun.toISOString()}`);
+  if (status.runtimeState && status.runtimeState !== "ok") {
+    lines.push(`  runtime state: ${status.runtimeState}`);
+    lines.push("  runtime:       unavailable");
+    return lines.join("\n");
+  }
   if (status.runtime) {
     lines.push(`  base dir:      ${status.runtime.baseDir}`);
     lines.push(`  config:        ${status.runtime.config}`);
@@ -77,6 +83,7 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
     }
     case "run": {
       const paths = resolvePaths(args.flags);
+      await prepareCyclePaths(paths);
       await runCycle(paths);
       break;
     }

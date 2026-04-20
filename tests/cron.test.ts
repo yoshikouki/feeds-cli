@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { intervalToCron, maybeRunHooks } from "../src/cron/index";
+import { intervalToCron, maybeRunHooks, prepareCyclePaths } from "../src/cron/index";
 import { renderCronStatus } from "../src/cli/commands/cron";
 
 describe("intervalToCron", () => {
@@ -83,6 +83,7 @@ describe("renderCronStatus", () => {
       registered: true,
       schedule: "*/30 * * * *",
       nextRun: new Date("2026-04-20T01:30:00.000Z"),
+      runtimeState: "ok",
       runtime: {
         baseDir: "/tmp/feeds",
         config: "/tmp/feeds/feeds.json5",
@@ -97,5 +98,32 @@ describe("renderCronStatus", () => {
     expect(text).toContain("db:            /tmp/feeds/feeds.db");
     expect(text).toContain("hooks:         disabled");
     expect(text).toContain("hooks dir:     /tmp/feeds/hooks/cron");
+  });
+
+  test("shows broken runtime state explicitly", () => {
+    const text = renderCronStatus({
+      registered: true,
+      schedule: "*/30 * * * *",
+      nextRun: new Date("2026-04-20T01:30:00.000Z"),
+      runtimeState: "invalid",
+      runtime: null,
+    });
+
+    expect(text).toContain("runtime state: invalid");
+    expect(text).toContain("runtime:       unavailable");
+  });
+});
+
+describe("prepareCyclePaths", () => {
+  test("creates the base directory before a cycle runs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "feeds-cycle-paths-"));
+    const base = join(root, "nested", "runtime");
+
+    try {
+      await prepareCyclePaths({ base });
+      await access(base);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

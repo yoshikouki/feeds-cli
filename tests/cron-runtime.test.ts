@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   clearCronRuntime,
+  loadCronRuntimeState,
   loadCronRuntime,
   resolveCronPaths,
   runtimeFromPaths,
@@ -48,12 +49,34 @@ describe("cron runtime state", () => {
     });
   });
 
-  test("falls back to default runtime when no state exists", async () => {
+  test("reports missing runtime state instead of falling back", async () => {
     const root = await mkdtemp(join(tmpdir(), "feeds-cron-runtime-"));
     tempRoots.push(root);
     const statePath = join(root, "missing.json");
 
-    expect(await resolveCronPaths(statePath)).toEqual(resolvePaths());
+    expect(await loadCronRuntimeState(statePath)).toEqual({
+      status: "missing",
+      runtime: null,
+    });
+    await expect(resolveCronPaths(statePath)).rejects.toThrow(
+      "Cron runtime state is missing",
+    );
+  });
+
+  test("reports invalid runtime state instead of falling back", async () => {
+    const root = await mkdtemp(join(tmpdir(), "feeds-cron-runtime-"));
+    tempRoots.push(root);
+    const statePath = join(root, "invalid.json");
+
+    await Bun.write(statePath, JSON.stringify({ baseDir: "/tmp/feeds-alt" }));
+
+    expect(await loadCronRuntimeState(statePath)).toEqual({
+      status: "invalid",
+      runtime: null,
+    });
+    await expect(resolveCronPaths(statePath)).rejects.toThrow(
+      "Cron runtime state is invalid",
+    );
   });
 
   test("clears persisted runtime state", async () => {
