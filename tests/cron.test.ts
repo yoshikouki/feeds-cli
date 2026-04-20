@@ -80,6 +80,7 @@ describe("maybeRunHooks", () => {
 describe("renderCronStatus", () => {
   test("shows effective runtime details", () => {
     const text = renderCronStatus({
+      jobTitle: "feeds-cli-feeds-abc123def456",
       registered: true,
       schedule: "*/30 * * * *",
       nextRun: new Date("2026-04-20T01:30:00.000Z"),
@@ -93,6 +94,7 @@ describe("renderCronStatus", () => {
       },
     });
 
+    expect(text).toContain("job title:     feeds-cli-feeds-abc123def456");
     expect(text).toContain("base dir:      /tmp/feeds");
     expect(text).toContain("config:        /tmp/feeds/feeds.json5");
     expect(text).toContain("db:            /tmp/feeds/feeds.db");
@@ -102,6 +104,7 @@ describe("renderCronStatus", () => {
 
   test("shows broken runtime state explicitly", () => {
     const text = renderCronStatus({
+      jobTitle: "feeds-cli-feeds-abc123def456",
       registered: true,
       schedule: "*/30 * * * *",
       nextRun: new Date("2026-04-20T01:30:00.000Z"),

@@ -5,6 +5,7 @@ import {
   ensureDir,
   type ResolvedPaths,
 } from "../paths.ts";
+import { cronJobTitle } from "./job-id.ts";
 
 export interface CronRuntime {
   baseDir: string;
@@ -19,8 +20,18 @@ export type CronRuntimeState =
   | { status: "missing"; runtime: null }
   | { status: "invalid"; runtime: null };
 
-export function cronRuntimeStatePath(baseDir: string = DEFAULT_BASE_DIR): string {
-  return join(baseDir, "cron.runtime.json");
+export function cronRuntimeStatePath(
+  jobTitle: string,
+  controlBaseDir: string = DEFAULT_BASE_DIR,
+): string {
+  return join(controlBaseDir, "cron", "jobs", `${jobTitle}.runtime.json`);
+}
+
+export function cronRuntimeStatePathForBaseDir(
+  baseDir: string,
+  controlBaseDir: string = DEFAULT_BASE_DIR,
+): string {
+  return cronRuntimeStatePath(cronJobTitle(baseDir), controlBaseDir);
 }
 
 export function runtimeFromPaths(paths: ResolvedPaths): CronRuntime {
@@ -45,15 +56,19 @@ export function pathsFromRuntime(runtime: CronRuntime): ResolvedPaths {
 
 export async function saveCronRuntime(
   runtime: CronRuntime,
-  statePath: string = cronRuntimeStatePath(),
+  jobTitle: string,
+  controlBaseDir: string = DEFAULT_BASE_DIR,
 ): Promise<void> {
+  const statePath = cronRuntimeStatePath(jobTitle, controlBaseDir);
   await ensureDir(dirname(statePath));
   await Bun.write(statePath, JSON.stringify(runtime, null, 2));
 }
 
 export async function loadCronRuntime(
-  statePath: string = cronRuntimeStatePath(),
+  jobTitle: string,
+  controlBaseDir: string = DEFAULT_BASE_DIR,
 ): Promise<CronRuntime | null> {
+  const statePath = cronRuntimeStatePath(jobTitle, controlBaseDir);
   const file = Bun.file(statePath);
   if (!(await file.exists())) {
     return null;
@@ -71,14 +86,18 @@ export async function loadCronRuntime(
 }
 
 export async function clearCronRuntime(
-  statePath: string = cronRuntimeStatePath(),
+  jobTitle: string,
+  controlBaseDir: string = DEFAULT_BASE_DIR,
 ): Promise<void> {
+  const statePath = cronRuntimeStatePath(jobTitle, controlBaseDir);
   await rm(statePath, { force: true });
 }
 
 export async function loadCronRuntimeState(
-  statePath: string = cronRuntimeStatePath(),
+  jobTitle: string,
+  controlBaseDir: string = DEFAULT_BASE_DIR,
 ): Promise<CronRuntimeState> {
+  const statePath = cronRuntimeStatePath(jobTitle, controlBaseDir);
   const file = Bun.file(statePath);
   if (!(await file.exists())) {
     return { status: "missing", runtime: null };
@@ -96,9 +115,10 @@ export async function loadCronRuntimeState(
 }
 
 export async function resolveCronPaths(
-  statePath: string = cronRuntimeStatePath(),
+  jobTitle: string,
+  controlBaseDir: string = DEFAULT_BASE_DIR,
 ): Promise<ResolvedPaths> {
-  const state = await loadCronRuntimeState(statePath);
+  const state = await loadCronRuntimeState(jobTitle, controlBaseDir);
   if (state.status === "ok") {
     return pathsFromRuntime(state.runtime);
   }

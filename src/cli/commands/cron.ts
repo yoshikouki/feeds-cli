@@ -34,6 +34,7 @@ export function renderCronStatus(status: Awaited<ReturnType<typeof cronStatus>>)
   }
 
   const lines = ["feeds cron: registered"];
+  lines.push(`  job title:     ${status.jobTitle}`);
   if (status.schedule) lines.push(`  schedule:      ${status.schedule}`);
   if (status.nextRun) lines.push(`  next run:      ${status.nextRun.toISOString()}`);
   if (status.runtimeState && status.runtimeState !== "ok") {
@@ -74,10 +75,10 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
       break;
     }
     case "stop":
-      await cronStop();
+      await cronStop(resolvePaths(args.flags).base);
       break;
     case "status": {
-      const status = await cronStatus();
+      const status = await cronStatus(resolvePaths(args.flags).base);
       output(status, args.flags.format, renderCronStatus);
       break;
     }

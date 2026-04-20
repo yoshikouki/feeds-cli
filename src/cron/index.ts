@@ -15,8 +15,8 @@ import {
   type CronRuntimeState,
   saveCronRuntime,
 } from "./runtime.ts";
+import { cronJobTitle } from "./job-id.ts";
 
-const CRON_JOB_TITLE = "feeds-cli";
 const WORKER_PATH = join(dirname(import.meta.filename), "worker.ts");
 
 /**
@@ -167,26 +167,28 @@ export async function cronStart(
   schedule: string,
   paths: ResolvedPaths,
 ): Promise<void> {
-  const previousRuntime = await loadCronRuntime();
-  await saveCronRuntime(runtimeFromPaths(paths));
+  const jobTitle = cronJobTitle(paths.base);
+  const previousRuntime = await loadCronRuntime(jobTitle);
+  await saveCronRuntime(runtimeFromPaths(paths), jobTitle);
 
   try {
-    await Bun.cron(WORKER_PATH, schedule, CRON_JOB_TITLE);
+    await Bun.cron(WORKER_PATH, schedule, jobTitle);
   } catch (err) {
     if (previousRuntime) {
-      await saveCronRuntime(previousRuntime);
+      await saveCronRuntime(previousRuntime, jobTitle);
     } else {
-      await clearCronRuntime();
+      await clearCronRuntime(jobTitle);
     }
     throw err;
   }
 
-  outputInfo(`Cron registered: "${schedule}" (${CRON_JOB_TITLE})`);
+  outputInfo(`Cron registered: "${schedule}" (${jobTitle})`);
 }
 
-export async function cronStop(): Promise<void> {
-  await Bun.cron.remove(CRON_JOB_TITLE);
-  await clearCronRuntime();
+export async function cronStop(baseDir: string): Promise<void> {
+  const jobTitle = cronJobTitle(baseDir);
+  await Bun.cron.remove(jobTitle);
+  await clearCronRuntime(jobTitle);
   outputInfo("Cron job removed.");
 }
 
@@ -195,6 +197,7 @@ export function cronNextRun(schedule: string): Date | null {
 }
 
 export interface CronStatus {
+  jobTitle: string;
   registered: boolean;
   schedule: string | null;
   nextRun: Date | null;
@@ -202,17 +205,19 @@ export interface CronStatus {
   runtime: CronRuntime | null;
 }
 
-export async function cronStatus(): Promise<CronStatus> {
+export async function cronStatus(baseDir: string): Promise<CronStatus> {
+  const jobTitle = cronJobTitle(baseDir);
   const platform = process.platform;
 
   if (platform === "darwin") {
-    return await cronStatusMacOS();
+    return await cronStatusMacOS(jobTitle);
   }
   if (platform === "linux") {
-    return await cronStatusLinux();
+    return await cronStatusLinux(jobTitle);
   }
 
   return {
+    jobTitle,
     registered: false,
     schedule: null,
     nextRun: null,
@@ -221,12 +226,13 @@ export async function cronStatus(): Promise<CronStatus> {
   };
 }
 
-async function cronStatusMacOS(): Promise<CronStatus> {
+async function cronStatusMacOS(jobTitle: string): Promise<CronStatus> {
   // Bun.cron registers as ~/Library/LaunchAgents/bun.cron.<title>.plist
-  const plistPath = `${process.env.HOME}/Library/LaunchAgents/bun.cron.${CRON_JOB_TITLE}.plist`;
+  const plistPath = `${process.env.HOME}/Library/LaunchAgents/bun.cron.${jobTitle}.plist`;
   const exists = await Bun.file(plistPath).exists();
   if (!exists) {
     return {
+      jobTitle,
       registered: false,
       schedule: null,
       nextRun: null,
@@ -241,14 +247,15 @@ async function cronStatusMacOS(): Promise<CronStatus> {
     stderr: "ignore",
   });
   const output = await new Response(proc.stdout).text();
-  const registered = output.includes(`bun.cron.${CRON_JOB_TITLE}`);
+  const registered = output.includes(`bun.cron.${jobTitle}`);
 
   // Extract schedule from plist to compute next run
   const schedule = await extractScheduleFromPlist(plistPath);
   const nextRun = schedule ? Bun.cron.parse(schedule) : null;
-  const runtimeState = registered ? await loadCronRuntimeState() : null;
+  const runtimeState = registered ? await loadCronRuntimeState(jobTitle) : null;
 
   return {
+    jobTitle,
     registered,
     schedule,
     nextRun,
@@ -268,7 +275,7 @@ async function extractScheduleFromPlist(plistPath: string): Promise<string | nul
   }
 }
 
-async function cronStatusLinux(): Promise<CronStatus> {
+async function cronStatusLinux(jobTitle: string): Promise<CronStatus> {
   // Bun.cron adds entries with "# bun-cron: <title>" marker
   const proc = Bun.spawn(["crontab", "-l"], {
     stdout: "pipe",
@@ -279,7 +286,7 @@ async function cronStatusLinux(): Promise<CronStatus> {
 
   let foundMarker = false;
   for (const line of lines) {
-    if (line.trim() === `# bun-cron: ${CRON_JOB_TITLE}`) {
+    if (line.trim() === `# bun-cron: ${jobTitle}`) {
       foundMarker = true;
       continue;
     }
@@ -289,8 +296,9 @@ async function cronStatusLinux(): Promise<CronStatus> {
       const periodMatch = line.match(/--cron-period='([^']+)'/);
       const schedule = periodMatch?.[1] ?? null;
       const nextRun = schedule ? Bun.cron.parse(schedule) : null;
-      const runtimeState = await loadCronRuntimeState();
+      const runtimeState = await loadCronRuntimeState(jobTitle);
       return {
+        jobTitle,
         registered: true,
         schedule,
         nextRun,
@@ -301,6 +309,7 @@ async function cronStatusLinux(): Promise<CronStatus> {
   }
 
   return {
+    jobTitle,
     registered: false,
     schedule: null,
     nextRun: null,
