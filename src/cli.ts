@@ -31,7 +31,7 @@ Usage: feeds <command> [options]
 
 Commands:
   add <url>          Register a new feed
-  scan [name]        Fetch and store articles
+  scan <name>|--all  Fetch and store articles
   list [name]        List articles
   read <id>          Show article content
   feeds              List registered feeds
@@ -40,8 +40,10 @@ Commands:
   log [cycles|scans] Show execution history
 
 Global options:
+  --base-dir <path>  Base directory for config, db, and hooks
   --config <path>    Config file path
   --db <path>        Database file path
+  --no-hooks         Disable cron hooks for this run
   --format json      Output as JSON
   -h, --help         Show help
   -v, --version      Show version`;

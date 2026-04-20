@@ -7,22 +7,26 @@ export interface ResolvedPaths {
   config: string;
   db: string;
   hooksDir: string;
+  hooksEnabled: boolean;
 }
 
 /**
  * All files live under ~/.feeds-cli/.
- * CLI flags --config / --db override individual file paths.
+ * CLI flags --base-dir / --config / --db override default path resolution.
  */
 export function resolvePaths(flags?: {
+  baseDir?: string;
   config?: string;
   db?: string;
+  noHooks?: boolean;
 }): ResolvedPaths {
-  const base = join(homedir(), ".feeds-cli");
+  const base = flags?.baseDir ?? join(homedir(), ".feeds-cli");
   return {
     base,
     config: flags?.config ?? join(base, "feeds.json5"),
     db: flags?.db ?? join(base, "feeds.db"),
     hooksDir: join(base, "hooks", "cron"),
+    hooksEnabled: !flags?.noHooks,
   };
 }
 

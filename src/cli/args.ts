@@ -4,10 +4,12 @@ export interface ParsedArgs {
   command: string | null;
   positionals: string[];
   flags: {
+    baseDir?: string;
     config?: string;
     db?: string;
     format: Format;
     help: boolean;
+    noHooks: boolean;
     version: boolean;
     // command-specific
     name?: string;
@@ -33,6 +35,7 @@ const FLAG_ALIASES: Record<string, string> = {
 };
 
 const FLAGS_WITH_VALUE = new Set([
+  "--base-dir",
   "--config",
   "--db",
   "--format",
@@ -53,6 +56,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     flags: {
       format: "human",
       help: false,
+      noHooks: false,
       version: false,
       all: false,
       unread: false,
@@ -70,6 +74,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
     if (token === "--help") {
       result.flags.help = true;
+    } else if (token === "--no-hooks") {
+      result.flags.noHooks = true;
     } else if (token === "--version") {
       result.flags.version = true;
     } else if (token === "--all") {
@@ -83,6 +89,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
       }
       const key = token.slice(2); // strip --
       switch (key) {
+        case "base-dir":
+          result.flags.baseDir = value;
+          break;
         case "config":
           result.flags.config = value;
           break;

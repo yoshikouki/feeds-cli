@@ -19,7 +19,13 @@ Usage:
   feeds cron start [--interval 30m]   Register OS cron job
   feeds cron stop                     Remove OS cron job
   feeds cron status                   Show cron job status
-  feeds cron run                      Run one scan cycle (foreground)`;
+  feeds cron run                      Run one scan cycle (foreground)
+
+Global options:
+  --base-dir <path>                   Base directory for config, db, and hooks
+  --config <path>                     Config file path override
+  --db <path>                         Database file path override
+  --no-hooks                          Disable cron hooks for this run`;
 
 export async function cronCommand(args: ParsedArgs): Promise<void> {
   const subcommand = args.positionals[0];

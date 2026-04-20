@@ -58,7 +58,7 @@ export async function runCycle(
         FEEDS_FEED_ID: feedDef.id ?? "",
       };
 
-      await runHooks(paths.hooksDir, {
+      await maybeRunHooks(paths, {
         event: "scan-start",
         env: feedEnv,
       });
@@ -70,14 +70,14 @@ export async function runCycle(
         hasErrors = true;
         const message = err instanceof Error ? err.message : String(err);
         outputError(`Scan failed for ${feedDef.name}: ${message}`);
-        await runHooks(paths.hooksDir, {
+        await maybeRunHooks(paths, {
           event: "scan-error",
           env: { ...feedEnv, FEEDS_ERROR_MESSAGE: message },
         });
         continue;
       }
 
-      await runHooks(paths.hooksDir, {
+      await maybeRunHooks(paths, {
         event: "scan-complete",
         env: {
           ...feedEnv,
@@ -88,7 +88,7 @@ export async function runCycle(
 
       if (result.newArticles.length > 0) {
         const json = JSON.stringify(result.newArticles);
-        await runHooks(paths.hooksDir, {
+        await maybeRunHooks(paths, {
           event: "new-articles",
           env: {
             ...feedEnv,
@@ -117,7 +117,7 @@ export async function runCycle(
       durationMs,
     );
 
-    await runHooks(paths.hooksDir, {
+    await maybeRunHooks(paths, {
       event: "cycle-complete",
       env: {
         FEEDS_TOTAL_FEEDS: String(config.feeds.length),
@@ -135,6 +135,17 @@ export async function runCycle(
     db.finishCycleLog(cycleId, "error", durationMs, message);
     throw err;
   }
+}
+
+export async function maybeRunHooks(
+  paths: Pick<ResolvedPaths, "hooksDir" | "hooksEnabled">,
+  params: Parameters<typeof runHooks>[1],
+): Promise<void> {
+  if (!paths.hooksEnabled) {
+    return;
+  }
+
+  await runHooks(paths.hooksDir, params);
 }
 
 // ─── Cron job management via Bun.cron() ───
