@@ -2,6 +2,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 
+export const DEFAULT_BASE_DIR = join(homedir(), ".feeds-cli");
+
 export interface ResolvedPaths {
   base: string;
   config: string;
@@ -20,7 +22,7 @@ export function resolvePaths(flags?: {
   db?: string;
   noHooks?: boolean;
 }): ResolvedPaths {
-  const base = flags?.baseDir ?? join(homedir(), ".feeds-cli");
+  const base = flags?.baseDir ?? DEFAULT_BASE_DIR;
   return {
     base,
     config: flags?.config ?? join(base, "feeds.json5"),

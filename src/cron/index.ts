@@ -6,6 +6,14 @@ import { scanFeed, type ScanResult } from "../scanner.ts";
 import { type ResolvedPaths } from "../paths.ts";
 import { runHooks } from "./hooks.ts";
 import type { CycleTrigger } from "../types.ts";
+import {
+  clearCronRuntime,
+  loadEffectiveCronRuntime,
+  loadCronRuntime,
+  runtimeFromPaths,
+  type CronRuntime,
+  saveCronRuntime,
+} from "./runtime.ts";
 
 const CRON_JOB_TITLE = "feeds-cli";
 const WORKER_PATH = join(dirname(import.meta.filename), "worker.ts");
@@ -150,13 +158,30 @@ export async function maybeRunHooks(
 
 // ─── Cron job management via Bun.cron() ───
 
-export async function cronStart(schedule: string): Promise<void> {
-  await Bun.cron(WORKER_PATH, schedule, CRON_JOB_TITLE);
+export async function cronStart(
+  schedule: string,
+  paths: ResolvedPaths,
+): Promise<void> {
+  const previousRuntime = await loadCronRuntime();
+  await saveCronRuntime(runtimeFromPaths(paths));
+
+  try {
+    await Bun.cron(WORKER_PATH, schedule, CRON_JOB_TITLE);
+  } catch (err) {
+    if (previousRuntime) {
+      await saveCronRuntime(previousRuntime);
+    } else {
+      await clearCronRuntime();
+    }
+    throw err;
+  }
+
   outputInfo(`Cron registered: "${schedule}" (${CRON_JOB_TITLE})`);
 }
 
 export async function cronStop(): Promise<void> {
   await Bun.cron.remove(CRON_JOB_TITLE);
+  await clearCronRuntime();
   outputInfo("Cron job removed.");
 }
 
@@ -168,6 +193,7 @@ export interface CronStatus {
   registered: boolean;
   schedule: string | null;
   nextRun: Date | null;
+  runtime: CronRuntime | null;
 }
 
 export async function cronStatus(): Promise<CronStatus> {
@@ -180,7 +206,7 @@ export async function cronStatus(): Promise<CronStatus> {
     return await cronStatusLinux();
   }
 
-  return { registered: false, schedule: null, nextRun: null };
+  return { registered: false, schedule: null, nextRun: null, runtime: null };
 }
 
 async function cronStatusMacOS(): Promise<CronStatus> {
@@ -188,7 +214,7 @@ async function cronStatusMacOS(): Promise<CronStatus> {
   const plistPath = `${process.env.HOME}/Library/LaunchAgents/bun.cron.${CRON_JOB_TITLE}.plist`;
   const exists = await Bun.file(plistPath).exists();
   if (!exists) {
-    return { registered: false, schedule: null, nextRun: null };
+    return { registered: false, schedule: null, nextRun: null, runtime: null };
   }
 
   // Check if loaded in launchctl
@@ -202,8 +228,9 @@ async function cronStatusMacOS(): Promise<CronStatus> {
   // Extract schedule from plist to compute next run
   const schedule = await extractScheduleFromPlist(plistPath);
   const nextRun = schedule ? Bun.cron.parse(schedule) : null;
+  const runtime = registered ? await loadEffectiveCronRuntime() : null;
 
-  return { registered, schedule, nextRun };
+  return { registered, schedule, nextRun, runtime };
 }
 
 async function extractScheduleFromPlist(plistPath: string): Promise<string | null> {
@@ -238,9 +265,10 @@ async function cronStatusLinux(): Promise<CronStatus> {
       const periodMatch = line.match(/--cron-period='([^']+)'/);
       const schedule = periodMatch?.[1] ?? null;
       const nextRun = schedule ? Bun.cron.parse(schedule) : null;
-      return { registered: true, schedule, nextRun };
+      const runtime = await loadEffectiveCronRuntime();
+      return { registered: true, schedule, nextRun, runtime };
     }
   }
 
-  return { registered: false, schedule: null, nextRun: null };
+  return { registered: false, schedule: null, nextRun: null, runtime: null };
 }

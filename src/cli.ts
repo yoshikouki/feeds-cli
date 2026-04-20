@@ -43,7 +43,7 @@ Global options:
   --base-dir <path>  Base directory for config, db, and hooks
   --config <path>    Config file path
   --db <path>        Database file path
-  --no-hooks         Disable cron hooks for this run
+  --no-hooks         Disable cron hooks for this run or saved cron runtime
   --format json      Output as JSON
   -h, --help         Show help
   -v, --version      Show version`;
