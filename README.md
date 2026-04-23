@@ -13,14 +13,16 @@ bun link        # `feeds` コマンドをグローバルに登録
 
 ## データの保存先
 
-[XDG Base Directory Spec](https://specifications.freedesktop.org/basedir-spec/latest/) に準拠:
+デフォルトでは、すべてのファイルを `~/.feeds-cli/` 配下に保存します:
 
-| 種類 | パス | 環境変数 |
-|------|------|---------|
-| 設定 | `~/.config/feeds-cli/feeds.json5` | `$XDG_CONFIG_HOME` |
-| データ | `~/.local/share/feeds-cli/feeds.db` | `$XDG_DATA_HOME` |
+| 種類 | パス |
+|------|------|
+| 設定 | `~/.feeds-cli/feeds.json5` |
+| データ | `~/.feeds-cli/feeds.db` |
+| フック | `~/.feeds-cli/hooks/cron/` |
 
-`--config <path>` / `--db <path>` フラグで個別に上書き可能。
+`--base-dir <path>` でワークスペース全体を切り替えられます。
+また、`--config <path>` / `--db <path>` で個別に上書き可能です。
 
 ## 設定ファイル
 
