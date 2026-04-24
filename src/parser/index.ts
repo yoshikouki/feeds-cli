@@ -1,10 +1,12 @@
 import { parseFeed, type Rss, type Atom, type Json, type Rdf } from "feedsmith";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 import type {
   ParsedArticle,
   ArticleAuthor,
   ArticleAttachment,
   FeedSourceDefinition,
+  SitemapConfig,
 } from "../types";
 
 // ── Helpers ──
@@ -13,6 +15,98 @@ function normalizeDate(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const d = new Date(raw);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function detectSitemapRoot(content: string): "urlset" | "sitemapindex" | null {
+  const withoutPreamble = content
+    .replace(/^\uFEFF/, "")
+    .trimStart()
+    .replace(/^<\?xml[^>]*>\s*/i, "")
+    .replace(/^(?:<!--[\s\S]*?-->\s*)*/, "");
+  const match = withoutPreamble.match(
+    /^<(?:(?:[A-Za-z_][\w.-]*):)?(urlset|sitemapindex)(?=[\s>])/,
+  );
+  return match?.[1] === "urlset" || match?.[1] === "sitemapindex"
+    ? match[1]
+    : null;
+}
+
+type XmlNode = Record<string, unknown>;
+
+const sitemapXmlParser = new XMLParser({
+  ignoreAttributes: true,
+  removeNSPrefix: true,
+  parseTagValue: false,
+  trimValues: true,
+  isArray: (tagName) => tagName === "url" || tagName === "sitemap",
+});
+
+function parseSitemapDocument(content: string): {
+  rootName: "urlset" | "sitemapindex";
+  root: XmlNode;
+} {
+  const validation = XMLValidator.validate(content);
+  if (validation !== true) {
+    throw new Error(`Invalid XML: ${validation.err.msg}`);
+  }
+
+  const parsed = sitemapXmlParser.parse(content) as XmlNode;
+  const rootName = ["urlset", "sitemapindex"].find((name) =>
+    isXmlNode(parsed[name]),
+  );
+  if (rootName !== "urlset" && rootName !== "sitemapindex") {
+    const actual = Object.keys(parsed)[0] ?? "(empty)";
+    throw new Error(`Unsupported sitemap root: ${actual}`);
+  }
+
+  return { rootName, root: parsed[rootName] as XmlNode };
+}
+
+function isXmlNode(value: unknown): value is XmlNode {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asXmlNodeArray(value: unknown): XmlNode[] {
+  if (Array.isArray(value)) return value.filter(isXmlNode);
+  return isXmlNode(value) ? [value] : [];
+}
+
+function xmlText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function humanizeUrlTitle(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const segment = parsed.pathname.split("/").filter(Boolean).at(-1);
+    if (!segment) return url;
+    const decoded = decodeURIComponent(segment).replace(/\.[A-Za-z0-9]+$/, "");
+    const words = decoded.replace(/[-_]+/g, " ").trim();
+    if (!words) return url;
+    return words.replace(/\b\p{L}/gu, (char) => char.toLocaleUpperCase());
+  } catch {
+    return url;
+  }
+}
+
+function compileSitemapFilters(config?: SitemapConfig): {
+  include: RegExp[];
+  exclude: RegExp[];
+} {
+  return {
+    include: config?.include?.map((pattern) => new RegExp(pattern)) ?? [],
+    exclude: config?.exclude?.map((pattern) => new RegExp(pattern)) ?? [],
+  };
+}
+
+function matchesSitemapFilters(
+  url: string,
+  filters: ReturnType<typeof compileSitemapFilters>,
+): boolean {
+  if (filters.include.length > 0 && !filters.include.some((re) => re.test(url))) {
+    return false;
+  }
+  return !filters.exclude.some((re) => re.test(url));
 }
 
 // ── Types ──
@@ -28,6 +122,10 @@ export interface FetchAndParseResult {
   articles: ParsedArticle[];
   warnings: string[];
   error: string | null;
+}
+
+interface ParseSitemapOptions {
+  filters?: ReturnType<typeof compileSitemapFilters>;
 }
 
 // ── Fetch ──
@@ -214,9 +312,83 @@ function normalizeRdfItems(items: Rdf.Item<string>[]): ParseFeedResult {
   return { articles, warnings };
 }
 
+// ── Normalize: Sitemap ──
+
+export function parseSitemapContent(
+  content: string,
+  config?: SitemapConfig,
+): ParseFeedResult {
+  return parseSitemapXml(content, {
+    filters: compileSitemapFilters(config),
+  });
+}
+
+function parseSitemapXml(
+  content: string,
+  options: ParseSitemapOptions = {},
+): ParseFeedResult {
+  const { rootName, root } = parseSitemapDocument(content);
+
+  if (rootName === "urlset") {
+    return normalizeSitemapUrls(root, options);
+  }
+
+  if (rootName === "sitemapindex") {
+    return {
+      articles: [],
+      warnings: [
+        "Skipped sitemapindex children during synchronous parsing; use fetchAndParseFeedSource for recursive sitemap parsing",
+      ],
+    };
+  }
+
+  throw new Error(`Unsupported sitemap root: ${rootName}`);
+}
+
+function normalizeSitemapUrls(
+  urlset: XmlNode,
+  options: ParseSitemapOptions,
+): ParseFeedResult {
+  const articles: ParsedArticle[] = [];
+  const warnings: string[] = [];
+  const filters = options.filters ?? compileSitemapFilters();
+
+  for (const entry of asXmlNodeArray(urlset.url)) {
+    const loc = xmlText(entry.loc);
+    if (!loc) {
+      warnings.push("Skipped sitemap url entry (no loc)");
+      continue;
+    }
+
+    if (!matchesSitemapFilters(loc, filters)) {
+      continue;
+    }
+
+    articles.push({
+      url: loc,
+      externalId: loc,
+      title: humanizeUrlTitle(loc),
+      summary: null,
+      content: null,
+      authors: [],
+      categories: [],
+      attachments: [],
+      publishedAt: null,
+      updatedAt: normalizeDate(xmlText(entry.lastmod)),
+      language: null,
+      sourceFormat: "sitemap",
+    });
+  }
+
+  return { articles, warnings };
+}
+
 // ── Detect ──
 
-export function detectFeedFormat(content: string): "rss" | "atom" | "json" | "rdf" {
+export function detectFeedFormat(
+  content: string,
+): "rss" | "atom" | "json" | "rdf" | "sitemap" {
+  if (detectSitemapRoot(content)) return "sitemap";
   const { format } = parseFeed(content);
   return format;
 }
@@ -224,6 +396,10 @@ export function detectFeedFormat(content: string): "rss" | "atom" | "json" | "rd
 // ── Parse ──
 
 export function parseFeedContent(content: string): ParseFeedResult {
+  if (detectSitemapRoot(content)) {
+    return parseSitemapContent(content);
+  }
+
   const { format, feed } = parseFeed(content);
 
   switch (format) {
@@ -238,11 +414,91 @@ export function parseFeedContent(content: string): ParseFeedResult {
   }
 }
 
+const MAX_SITEMAP_DEPTH = 5;
+
+async function fetchAndParseSitemapSource(
+  source: FeedSourceDefinition,
+): Promise<FetchAndParseResult> {
+  const filters = compileSitemapFilters(source.sitemap);
+  const visited = new Set<string>();
+
+  try {
+    const result = await fetchAndParseSitemapUrl(
+      source.url,
+      filters,
+      visited,
+      0,
+    );
+    return { ...result, error: null };
+  } catch (e) {
+    return {
+      articles: [],
+      warnings: [],
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+async function fetchAndParseSitemapUrl(
+  url: string,
+  filters: ReturnType<typeof compileSitemapFilters>,
+  visited: Set<string>,
+  depth: number,
+): Promise<ParseFeedResult> {
+  if (depth > MAX_SITEMAP_DEPTH) {
+    return {
+      articles: [],
+      warnings: [`Skipped sitemap ${url} (max depth ${MAX_SITEMAP_DEPTH} exceeded)`],
+    };
+  }
+
+  if (visited.has(url)) {
+    return {
+      articles: [],
+      warnings: [`Skipped already visited sitemap: ${url}`],
+    };
+  }
+  visited.add(url);
+
+  const raw = await fetchFeed(url);
+  const { rootName, root } = parseSitemapDocument(raw);
+
+  if (rootName === "urlset") {
+    return normalizeSitemapUrls(root, { filters });
+  }
+
+  const articles: ParsedArticle[] = [];
+  const warnings: string[] = [];
+
+  for (const sitemap of asXmlNodeArray(root.sitemap)) {
+    const loc = xmlText(sitemap.loc);
+    if (!loc) {
+      warnings.push("Skipped sitemapindex entry (no loc)");
+      continue;
+    }
+
+    const child = await fetchAndParseSitemapUrl(
+      loc,
+      filters,
+      visited,
+      depth + 1,
+    );
+    articles.push(...child.articles);
+    warnings.push(...child.warnings);
+  }
+
+  return { articles, warnings };
+}
+
 // ── Orchestrator ──
 
 export async function fetchAndParseFeedSource(
   source: FeedSourceDefinition,
 ): Promise<FetchAndParseResult> {
+  if (source.kind === "sitemap" || source.sitemap) {
+    return fetchAndParseSitemapSource(source);
+  }
+
   if (source.kind === "activitypub") {
     return {
       articles: [],

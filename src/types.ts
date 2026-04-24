@@ -8,11 +8,17 @@ export interface ScrapeConfig {
   dateSelector?: string;
 }
 
+export interface SitemapConfig {
+  include?: string[];
+  exclude?: string[];
+}
+
 export type SourceKind =
   | "rss"
   | "atom"
   | "json"
   | "rdf"
+  | "sitemap"
   | "scrape"
   | "activitypub";
 
@@ -23,6 +29,7 @@ export interface FeedSourceDefinition {
   url: string;
   tags?: string[];
   scrape?: ScrapeConfig;
+  sitemap?: SitemapConfig;
 }
 
 export interface FeedDefinition {

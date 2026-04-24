@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.1",
+    "fast-xml-parser": "^5.5.9",
     "feedsmith": "^3.0.0-next.6"
   }
 }

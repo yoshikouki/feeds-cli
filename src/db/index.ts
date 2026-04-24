@@ -1240,6 +1240,7 @@ function inferSourceKind(url: string): SourceKind {
   if (url.endsWith(".json")) return "json";
   if (url.endsWith(".rdf")) return "rdf";
   if (url.endsWith(".atom") || url.includes("/atom")) return "atom";
+  if (url.endsWith(".xml") && url.includes("sitemap")) return "sitemap";
   return "rss";
 }
 

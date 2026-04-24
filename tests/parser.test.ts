@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test";
-import { parseFeedContent } from "../src/parser";
+import {
+  fetchAndParseFeedSource,
+  parseFeedContent,
+  parseSitemapContent,
+} from "../src/parser";
 
 // ── Fixtures ──
 
@@ -141,6 +145,30 @@ const JSON_FEED_NO_URL_FIXTURE = JSON.stringify({
     { id: "1", title: "No URL item", content_text: "Missing url field" },
   ],
 });
+
+const SITEMAP_URLSET_FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://example.com/posts/hello-world</loc>
+    <lastmod>2025-01-02</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://example.com/docs/api-reference.html</loc>
+    <lastmod>2025-02-03T04:05:06+09:00</lastmod>
+  </url>
+</urlset>`;
+
+const SITEMAP_NO_LASTMOD_FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://example.com/about</loc>
+  </url>
+  <url>
+    <lastmod>2025-01-02</lastmod>
+  </url>
+</urlset>`;
 
 // ── Tests ──
 
@@ -321,6 +349,103 @@ describe("parseFeedContent", () => {
       expect(articles).toHaveLength(0);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("No URL item");
+    });
+  });
+
+  describe("Sitemap 0.9", () => {
+    test("normalizes urlset entries", () => {
+      const { articles, warnings } = parseSitemapContent(SITEMAP_URLSET_FIXTURE);
+      expect(warnings).toHaveLength(0);
+      expect(articles).toHaveLength(2);
+
+      expect(articles[0]).toMatchObject({
+        url: "https://example.com/posts/hello-world",
+        externalId: "https://example.com/posts/hello-world",
+        title: "Hello World",
+        summary: null,
+        content: null,
+        authors: [],
+        categories: [],
+        attachments: [],
+        publishedAt: null,
+        updatedAt: "2025-01-02T00:00:00.000Z",
+        language: null,
+        sourceFormat: "sitemap",
+      });
+      expect(articles[1].title).toBe("Api Reference");
+      expect(articles[1].updatedAt).toBe("2025-02-02T19:05:06.000Z");
+    });
+
+    test("allows missing optional lastmod and warns on missing loc", () => {
+      const { articles, warnings } = parseSitemapContent(SITEMAP_NO_LASTMOD_FIXTURE);
+      expect(articles).toHaveLength(1);
+      expect(articles[0].url).toBe("https://example.com/about");
+      expect(articles[0].updatedAt).toBeNull();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("no loc");
+    });
+
+    test("applies include and exclude filters to article URLs", () => {
+      const { articles } = parseSitemapContent(SITEMAP_URLSET_FIXTURE, {
+        include: ["/(posts|docs)/"],
+        exclude: ["api-reference"],
+      });
+      expect(articles).toHaveLength(1);
+      expect(articles[0].url).toBe("https://example.com/posts/hello-world");
+    });
+
+    test("recursively fetches sitemapindex children", async () => {
+      const originalFetch = globalThis.fetch;
+      const responses = new Map([
+        [
+          "https://example.com/sitemap.xml",
+          `<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://example.com/posts.xml</loc></sitemap>
+  <sitemap><loc>https://example.com/docs.xml</loc></sitemap>
+</sitemapindex>`,
+        ],
+        [
+          "https://example.com/posts.xml",
+          `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/posts/one</loc><lastmod>2025-03-01</lastmod></url>
+</urlset>`,
+        ],
+        [
+          "https://example.com/docs.xml",
+          `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/docs/two</loc></url>
+</urlset>`,
+        ],
+      ]);
+
+      globalThis.fetch = ((url: string | URL | Request) => {
+        const key = url.toString();
+        const body = responses.get(key);
+        if (!body) {
+          return Promise.resolve(new Response("not found", { status: 404 }));
+        }
+        return Promise.resolve(new Response(body));
+      }) as typeof fetch;
+
+      try {
+        const { articles, warnings, error } = await fetchAndParseFeedSource({
+          name: "sitemap",
+          kind: "sitemap",
+          url: "https://example.com/sitemap.xml",
+          sitemap: { include: ["/(posts|docs)/"], exclude: ["/docs/"] },
+        });
+
+        expect(error).toBeNull();
+        expect(warnings).toHaveLength(0);
+        expect(articles).toHaveLength(1);
+        expect(articles[0].url).toBe("https://example.com/posts/one");
+        expect(articles[0].sourceFormat).toBe("sitemap");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 
