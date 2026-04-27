@@ -11,7 +11,11 @@ import type {
 } from "../contracts/event.ts";
 import type { FeedDatabase } from "../db/index.ts";
 import type { ResolvedPaths } from "../paths.ts";
-import { runHooks, type HookContext } from "../cron/hooks.ts";
+import {
+  discoverHooks,
+  executeHooks,
+  type HookContext,
+} from "../cron/hooks.ts";
 import { workspaceIdFromBaseDir } from "./identity.ts";
 
 export async function dispatchPendingEvents(
@@ -28,8 +32,15 @@ export async function dispatchPendingEvents(
       continue;
     }
 
+    const hooks = await discoverHooks(paths.hooksDir, hookContext.event);
+    const pendingHooks = hooks.filter((hookPath) => !db.hasSuccessfulHookRun(record.event.id, hookPath));
+    if (pendingHooks.length === 0) {
+      db.markEventDispatched(record.event.id);
+      continue;
+    }
+
     const startedAt = new Date().toISOString();
-    const hookResults = await runHooks(paths.hooksDir, hookContext);
+    const hookResults = await executeHooks(pendingHooks, hookContext);
     const finishedAt = new Date().toISOString();
 
     if (hookResults.length === 0) {

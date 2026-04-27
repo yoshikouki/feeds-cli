@@ -41,6 +41,7 @@ import type {
 } from "../types";
 import { createId } from "../types";
 import { normalizeFeedDefinition } from "../config";
+import { intervalToMs, isStaleRunningJob } from "../control-plane/heartbeat.ts";
 import {
   articleAuthors,
   articleCategories,
@@ -735,7 +736,7 @@ export class FeedDatabase implements Disposable {
     return row ? this.toJobRunRecord(row) : null;
   }
 
-  jobExecutionHealth(job: ScheduledJobSpec): JobExecutionHealth {
+  jobExecutionHealth(job: ScheduledJobSpec, now: Date = new Date()): JobExecutionHealth {
     const recentRows = this.sqlite
       .query(
         `SELECT id, workspace_id, pipeline_id, job_id, purpose, triggered_by, status,
@@ -750,6 +751,7 @@ export class FeedDatabase implements Disposable {
     const latest = recentRows[0] ?? null;
     const lastSuccess = recentRows.find((row) => row.status === "success") ?? null;
     const lastFailure = recentRows.find((row) => row.status === "error") ?? null;
+    const latestRecord = latest ? this.toJobRunRecord(latest) : null;
     let consecutiveFailures = 0;
     for (const row of recentRows) {
       if (row.status === "error") {
@@ -763,12 +765,14 @@ export class FeedDatabase implements Disposable {
 
     let status: JobExecutionHealth["status"] = "never-ran";
     if (latest) {
-      if (latest.status === "error") {
+      if (isStaleRunningJob(job, latestRecord, now)) {
+        status = "stale";
+      } else if (latest.status === "error") {
         status = "degraded";
       } else if (job.schedule.kind === "interval") {
         const intervalMs = intervalToMs(job.schedule.every);
         const staleAfterMs = intervalMs === null ? null : intervalMs * 2;
-        if (staleAfterMs !== null && Date.now() - Date.parse(latest.started_at) > staleAfterMs) {
+        if (staleAfterMs !== null && now.getTime() - Date.parse(latest.started_at) > staleAfterMs) {
           status = "stale";
         } else {
           status = "healthy";
@@ -862,6 +866,18 @@ export class FeedDatabase implements Disposable {
       )
       .get(eventId, hookKey) as { attempt: number | null } | null;
     return Number(row?.attempt ?? 0) + 1;
+  }
+
+  hasSuccessfulHookRun(eventId: string, hookKey: string): boolean {
+    const row = this.sqlite
+      .query(
+        `SELECT 1
+         FROM hook_runs
+         WHERE event_id = ? AND hook_key = ? AND status = 'success'
+         LIMIT 1`,
+      )
+      .get(eventId, hookKey) as { 1: number } | null;
+    return row !== null;
   }
 
   recordHookRun(input: {
@@ -1588,16 +1604,4 @@ function normalizeCanonicalUrl(url: string): string {
   } catch {
     return url;
   }
-}
-
-function intervalToMs(value: string): number | null {
-  const match = value.match(/^(\d+)(m|h)$/);
-  if (!match) {
-    return null;
-  }
-
-  const amount = Number(match[1]);
-  return match[2] === "h"
-    ? amount * 60 * 60 * 1000
-    : amount * 60 * 1000;
 }

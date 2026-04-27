@@ -2,6 +2,7 @@ import type { JobRunRecord } from "../contracts/control-plane.ts";
 import type { ScheduledJobSpec } from "../contracts/scheduler.ts";
 
 export const HEARTBEAT_CRON_SCHEDULE = "* * * * *";
+const DEFAULT_RUNNING_STALE_MS = 10 * 60 * 1000;
 
 export function planDueJobs(
   jobs: readonly ScheduledJobSpec[],
@@ -24,6 +25,10 @@ export function isJobDue(
     return true;
   }
 
+  if (isStaleRunningJob(job, latestRun, now)) {
+    return true;
+  }
+
   if (latestRun.status === "running" && latestRun.finishedAt === null) {
     return false;
   }
@@ -38,6 +43,30 @@ export function isJobDue(
   }
 
   return now.getTime() - Date.parse(latestRun.startedAt) >= intervalMs;
+}
+
+export function isStaleRunningJob(
+  job: ScheduledJobSpec,
+  latestRun: JobRunRecord | null,
+  now: Date = new Date(),
+): boolean {
+  if (!latestRun || latestRun.status !== "running" || latestRun.finishedAt !== null) {
+    return false;
+  }
+
+  const staleAfterMs = runningJobStaleAfterMs(job);
+  return now.getTime() - Date.parse(latestRun.startedAt) >= staleAfterMs;
+}
+
+export function runningJobStaleAfterMs(job: ScheduledJobSpec): number {
+  if (job.schedule.kind === "interval") {
+    const intervalMs = intervalToMs(job.schedule.every);
+    if (intervalMs !== null) {
+      return intervalMs * 2;
+    }
+  }
+
+  return DEFAULT_RUNNING_STALE_MS;
 }
 
 export function intervalToMs(value: string): number | null {
