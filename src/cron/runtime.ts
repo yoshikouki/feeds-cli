@@ -1,11 +1,14 @@
 import { dirname, join } from "node:path";
 import { rm } from "node:fs/promises";
+import type { ScheduledJobSpec } from "../contracts/scheduler.ts";
 import {
   DEFAULT_BASE_DIR,
   ensureDir,
   type ResolvedPaths,
 } from "../paths.ts";
 import { cronJobTitle } from "./job-id.ts";
+import { defaultScheduledScanJob } from "../control-plane/identity.ts";
+import { HEARTBEAT_CRON_SCHEDULE } from "../control-plane/heartbeat.ts";
 
 export interface CronRuntime {
   baseDir: string;
@@ -13,6 +16,8 @@ export interface CronRuntime {
   db: string;
   hooksDir: string;
   hooksEnabled: boolean;
+  heartbeatSchedule: string;
+  jobs: readonly ScheduledJobSpec[];
 }
 
 export type CronRuntimeState =
@@ -34,14 +39,26 @@ export function cronRuntimeStatePathForBaseDir(
   return cronRuntimeStatePath(cronJobTitle(baseDir), controlBaseDir);
 }
 
-export function runtimeFromPaths(paths: ResolvedPaths): CronRuntime {
+export function runtimeFromPaths(
+  paths: ResolvedPaths,
+  jobs: readonly ScheduledJobSpec[] = [],
+): CronRuntime {
   return {
     baseDir: paths.base,
     config: paths.config,
     db: paths.db,
     hooksDir: paths.hooksDir,
     hooksEnabled: paths.hooksEnabled,
+    heartbeatSchedule: HEARTBEAT_CRON_SCHEDULE,
+    jobs,
   };
+}
+
+export function runtimeWithDefaultScanJob(
+  paths: ResolvedPaths,
+  every: string,
+): CronRuntime {
+  return runtimeFromPaths(paths, [defaultScheduledScanJob(paths.base, every)]);
 }
 
 export function pathsFromRuntime(runtime: CronRuntime): ResolvedPaths {
@@ -141,6 +158,41 @@ function isCronRuntime(value: unknown): value is CronRuntime {
     typeof runtime.config === "string" &&
     typeof runtime.db === "string" &&
     typeof runtime.hooksDir === "string" &&
-    typeof runtime.hooksEnabled === "boolean"
+    typeof runtime.hooksEnabled === "boolean" &&
+    typeof runtime.heartbeatSchedule === "string" &&
+    Array.isArray(runtime.jobs) &&
+    runtime.jobs.every(isScheduledJobSpec)
   );
+}
+
+function isScheduledJobSpec(value: unknown): value is ScheduledJobSpec {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const job = value as Partial<ScheduledJobSpec>;
+  return (
+    typeof job.id === "string" &&
+    typeof job.workspaceId === "string" &&
+    typeof job.pipelineId === "string" &&
+    (job.purpose === "scan" || job.purpose === "batch") &&
+    typeof job.enabled === "boolean" &&
+    isScheduleSpec(job.schedule)
+  );
+}
+
+function isScheduleSpec(value: unknown): value is ScheduledJobSpec["schedule"] {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const schedule = value as ScheduledJobSpec["schedule"];
+  if (schedule.kind === "interval") {
+    return typeof schedule.every === "string";
+  }
+  if (schedule.kind === "cron") {
+    return typeof schedule.expression === "string"
+      && (schedule.timeZone === undefined || typeof schedule.timeZone === "string");
+  }
+  return false;
 }

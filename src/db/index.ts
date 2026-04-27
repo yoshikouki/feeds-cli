@@ -5,6 +5,25 @@ import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 
 import type {
+  HookRunRecord,
+  HookRunStatus,
+  JobExecutionHealth,
+  JobRunRecord,
+  JobRunStatus,
+  PersistedEventRecord,
+  PersistedEventStatus,
+} from "../contracts/control-plane.ts";
+import type { EventEnvelope, EventKind } from "../contracts/event.ts";
+import type {
+  HookRunId,
+  IsoDateTimeString,
+  JobId,
+  JobRunId,
+  PipelineId,
+  WorkspaceId,
+} from "../contracts/primitives.ts";
+import type { ScheduledJobSpec } from "../contracts/scheduler.ts";
+import type {
   Article,
   ArticleAttachment,
   ArticleAuthor,
@@ -31,6 +50,7 @@ import {
   articleTags,
   canonicalArticles,
   cycleLog,
+  events,
   feedAliases,
   feedGroupMemberships,
   feedGroups,
@@ -38,6 +58,8 @@ import {
   feedSourceStates,
   feedSources,
   feedSourceTags,
+  hookRuns,
+  jobRuns,
   scanLog,
 } from "./schema";
 
@@ -102,6 +124,48 @@ interface FeedSourceStateRow {
   lastError: string | null;
 }
 
+interface JobRunRow {
+  id: string;
+  workspace_id: string;
+  pipeline_id: string;
+  job_id: string;
+  purpose: string;
+  triggered_by: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error_message: string | null;
+}
+
+interface EventRow {
+  id: string;
+  workspace_id: string;
+  pipeline_id: string;
+  kind: string;
+  status: string;
+  payload: string;
+  occurred_at: string;
+  attempt_count: number;
+  last_dispatch_at: string | null;
+  last_error: string | null;
+}
+
+interface HookRunRow {
+  id: string;
+  event_id: string;
+  workspace_id: string;
+  pipeline_id: string;
+  hook_key: string;
+  status: string;
+  attempt: number;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  exit_code: number | null;
+  error_message: string | null;
+}
+
 const MIGRATIONS_FOLDER = join(import.meta.dir, "migrations");
 
 export class FeedDatabase implements Disposable {
@@ -124,9 +188,12 @@ export class FeedDatabase implements Disposable {
         feedGroupMemberships,
         feedGroups,
         feeds,
+        events,
         feedSourceStates,
         feedSources,
         feedSourceTags,
+        hookRuns,
+        jobRuns,
         cycleLog,
         scanLog,
       },
@@ -602,6 +669,241 @@ export class FeedDatabase implements Disposable {
     ).toISOString();
     this.sqlite.run(`DELETE FROM scan_log WHERE scanned_at < ?`, [cutoff]);
     this.sqlite.run(`DELETE FROM cycle_log WHERE started_at < ?`, [cutoff]);
+  }
+
+  // ─── Control Plane (Phase 1) ───
+
+  insertJobRun(input: {
+    workspaceId: WorkspaceId;
+    pipelineId: PipelineId;
+    jobId: JobId;
+    purpose: ScheduledJobSpec["purpose"];
+    triggeredBy: "heartbeat" | "manual";
+  }): JobRunId {
+    const id = createId() as JobRunId;
+    this.db.insert(jobRuns).values({
+      id,
+      workspaceId: input.workspaceId,
+      pipelineId: input.pipelineId,
+      jobId: input.jobId,
+      purpose: input.purpose,
+      triggeredBy: input.triggeredBy,
+      status: "running",
+      startedAt: new Date().toISOString(),
+    }).run();
+    return id;
+  }
+
+  finishJobRun(
+    jobRunId: JobRunId,
+    status: Exclude<JobRunStatus, "running">,
+    errorMessage?: string,
+  ): void {
+    const startedAt = this.db
+      .select({ startedAt: jobRuns.startedAt })
+      .from(jobRuns)
+      .where(eq(jobRuns.id, jobRunId))
+      .get()?.startedAt;
+    const finishedAt = new Date().toISOString();
+    const durationMs = startedAt
+      ? Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt))
+      : null;
+
+    this.db.update(jobRuns)
+      .set({
+        status,
+        finishedAt,
+        durationMs,
+        errorMessage: errorMessage ?? null,
+      })
+      .where(eq(jobRuns.id, jobRunId))
+      .run();
+  }
+
+  latestJobRun(jobId: JobId): JobRunRecord | null {
+    const row = this.sqlite
+      .query(
+        `SELECT id, workspace_id, pipeline_id, job_id, purpose, triggered_by, status,
+                started_at, finished_at, duration_ms, error_message
+         FROM job_runs
+         WHERE job_id = ?
+         ORDER BY started_at DESC
+         LIMIT 1`,
+      )
+      .get(jobId) as JobRunRow | null;
+
+    return row ? this.toJobRunRecord(row) : null;
+  }
+
+  jobExecutionHealth(job: ScheduledJobSpec): JobExecutionHealth {
+    const recentRows = this.sqlite
+      .query(
+        `SELECT id, workspace_id, pipeline_id, job_id, purpose, triggered_by, status,
+                started_at, finished_at, duration_ms, error_message
+         FROM job_runs
+         WHERE job_id = ?
+         ORDER BY started_at DESC
+         LIMIT 20`,
+      )
+      .all(job.id) as JobRunRow[];
+
+    const latest = recentRows[0] ?? null;
+    const lastSuccess = recentRows.find((row) => row.status === "success") ?? null;
+    const lastFailure = recentRows.find((row) => row.status === "error") ?? null;
+    let consecutiveFailures = 0;
+    for (const row of recentRows) {
+      if (row.status === "error") {
+        consecutiveFailures += 1;
+        continue;
+      }
+      if (row.status === "success") {
+        break;
+      }
+    }
+
+    let status: JobExecutionHealth["status"] = "never-ran";
+    if (latest) {
+      if (latest.status === "error") {
+        status = "degraded";
+      } else if (job.schedule.kind === "interval") {
+        const intervalMs = intervalToMs(job.schedule.every);
+        const staleAfterMs = intervalMs === null ? null : intervalMs * 2;
+        if (staleAfterMs !== null && Date.now() - Date.parse(latest.started_at) > staleAfterMs) {
+          status = "stale";
+        } else {
+          status = "healthy";
+        }
+      } else {
+        status = latest.status === "success" ? "healthy" : "degraded";
+      }
+    }
+
+    return {
+      jobId: job.id,
+      status,
+      lastStartedAt: (latest?.started_at ?? null) as IsoDateTimeString | null,
+      lastFinishedAt: (latest?.finished_at ?? null) as IsoDateTimeString | null,
+      lastSuccessAt: (lastSuccess?.finished_at ?? null) as IsoDateTimeString | null,
+      lastErrorAt: (lastFailure?.finished_at ?? null) as IsoDateTimeString | null,
+      consecutiveFailures,
+    };
+  }
+
+  insertEvent<TKind extends EventKind>(event: EventEnvelope<TKind>): void {
+    this.db.insert(events).values({
+      id: event.id,
+      workspaceId: event.workspaceId,
+      pipelineId: event.pipelineId,
+      kind: event.kind,
+      status: "pending",
+      payload: JSON.stringify(event.payload),
+      occurredAt: event.occurredAt,
+      attemptCount: 0,
+      lastDispatchAt: null,
+      lastError: null,
+    }).run();
+  }
+
+  listDispatchableEvents(workspaceId: WorkspaceId, limit: number = 200): PersistedEventRecord[] {
+    const rows = this.sqlite
+      .query(
+        `SELECT id, workspace_id, pipeline_id, kind, status, payload, occurred_at,
+                attempt_count, last_dispatch_at, last_error
+         FROM events
+         WHERE workspace_id = ? AND status IN ('pending', 'failed')
+         ORDER BY occurred_at ASC
+         LIMIT ?`,
+      )
+      .all(workspaceId, limit) as EventRow[];
+    return rows.map((row) => this.toPersistedEventRecord(row));
+  }
+
+  markEventDispatched(eventId: string): void {
+    this.db.update(events)
+      .set({
+        status: "dispatched",
+        attemptCount: sql`${events.attemptCount} + 1`,
+        lastDispatchAt: new Date().toISOString(),
+        lastError: null,
+      })
+      .where(eq(events.id, eventId))
+      .run();
+  }
+
+  markEventFailed(eventId: string, errorMessage: string): void {
+    this.db.update(events)
+      .set({
+        status: "failed",
+        attemptCount: sql`${events.attemptCount} + 1`,
+        lastDispatchAt: new Date().toISOString(),
+        lastError: errorMessage,
+      })
+      .where(eq(events.id, eventId))
+      .run();
+  }
+
+  countEventsByStatus(workspaceId: WorkspaceId, status: PersistedEventStatus): number {
+    const row = this.sqlite
+      .query(
+        `SELECT COUNT(*) as count
+         FROM events
+         WHERE workspace_id = ? AND status = ?`,
+      )
+      .get(workspaceId, status) as { count: number | bigint };
+    return Number(row?.count ?? 0);
+  }
+
+  nextHookAttempt(eventId: string, hookKey: string): number {
+    const row = this.sqlite
+      .query(
+        `SELECT MAX(attempt) as attempt
+         FROM hook_runs
+         WHERE event_id = ? AND hook_key = ?`,
+      )
+      .get(eventId, hookKey) as { attempt: number | null } | null;
+    return Number(row?.attempt ?? 0) + 1;
+  }
+
+  recordHookRun(input: {
+    eventId: string;
+    workspaceId: WorkspaceId;
+    pipelineId: PipelineId;
+    hookKey: string;
+    attempt: number;
+    status: HookRunStatus;
+    startedAt: string;
+    finishedAt: string;
+    exitCode: number | null;
+    errorMessage: string | null;
+  }): HookRunId {
+    const id = createId() as HookRunId;
+    const durationMs = Math.max(0, Date.parse(input.finishedAt) - Date.parse(input.startedAt));
+    this.db.insert(hookRuns).values({
+      id,
+      eventId: input.eventId,
+      workspaceId: input.workspaceId,
+      pipelineId: input.pipelineId,
+      hookKey: input.hookKey,
+      status: input.status,
+      attempt: input.attempt,
+      startedAt: input.startedAt,
+      finishedAt: input.finishedAt,
+      durationMs,
+      exitCode: input.exitCode,
+      errorMessage: input.errorMessage,
+    }).run();
+    return id;
+  }
+
+  countFailedHookRuns(workspaceId: WorkspaceId): number {
+    const row = this.sqlite
+      .query(
+        `SELECT COUNT(*) as count
+         FROM hook_runs
+         WHERE workspace_id = ? AND status = 'failed'`,
+      )
+      .get(workspaceId) as { count: number | bigint };
+    return Number(row?.count ?? 0);
   }
 
   // ─── Articles ───
@@ -1220,6 +1522,40 @@ export class FeedDatabase implements Disposable {
         .get()?.dedupHash ?? null,
     };
   }
+
+  private toJobRunRecord(row: JobRunRow): JobRunRecord {
+    return {
+      id: row.id as JobRunId,
+      workspaceId: row.workspace_id as WorkspaceId,
+      pipelineId: row.pipeline_id as PipelineId,
+      jobId: row.job_id as JobId,
+      purpose: row.purpose as ScheduledJobSpec["purpose"],
+      triggeredBy: row.triggered_by as "heartbeat" | "manual",
+      status: row.status as JobRunStatus,
+      startedAt: row.started_at as IsoDateTimeString,
+      finishedAt: row.finished_at as IsoDateTimeString | null,
+      durationMs: row.duration_ms,
+      errorMessage: row.error_message,
+    };
+  }
+
+  private toPersistedEventRecord(row: EventRow): PersistedEventRecord {
+    const payload = JSON.parse(row.payload) as EventEnvelope["payload"];
+    return {
+      event: {
+        id: row.id as EventEnvelope["id"],
+        workspaceId: row.workspace_id as WorkspaceId,
+        pipelineId: row.pipeline_id as PipelineId,
+        kind: row.kind as EventKind,
+        occurredAt: row.occurred_at as IsoDateTimeString,
+        payload,
+      },
+      status: row.status as PersistedEventStatus,
+      attemptCount: Number(row.attempt_count),
+      lastDispatchAt: row.last_dispatch_at as IsoDateTimeString | null,
+      lastError: row.last_error,
+    };
+  }
 }
 
 function choosePreferredText(existing: string, incoming: string): string {
@@ -1252,4 +1588,16 @@ function normalizeCanonicalUrl(url: string): string {
   } catch {
     return url;
   }
+}
+
+function intervalToMs(value: string): number | null {
+  const match = value.match(/^(\d+)(m|h)$/);
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number(match[1]);
+  return match[2] === "h"
+    ? amount * 60 * 60 * 1000
+    : amount * 60 * 1000;
 }

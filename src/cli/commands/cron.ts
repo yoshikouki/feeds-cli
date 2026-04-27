@@ -35,8 +35,12 @@ export function renderCronStatus(status: Awaited<ReturnType<typeof cronStatus>>)
 
   const lines = ["feeds cron: registered"];
   lines.push(`  job title:     ${status.jobTitle}`);
-  if (status.schedule) lines.push(`  schedule:      ${status.schedule}`);
-  if (status.nextRun) lines.push(`  next run:      ${status.nextRun.toISOString()}`);
+  if (status.heartbeatSchedule) {
+    lines.push(`  heartbeat:     ${status.heartbeatSchedule}`);
+  }
+  if (status.nextHeartbeatRun) {
+    lines.push(`  next tick:     ${status.nextHeartbeatRun.toISOString()}`);
+  }
   if (status.runtimeState && status.runtimeState !== "ok") {
     lines.push(`  runtime state: ${status.runtimeState}`);
     lines.push("  runtime:       unavailable");
@@ -50,7 +54,25 @@ export function renderCronStatus(status: Awaited<ReturnType<typeof cronStatus>>)
       `  hooks:         ${status.runtime.hooksEnabled ? "enabled" : "disabled"}`,
     );
     lines.push(`  hooks dir:     ${status.runtime.hooksDir}`);
+    if (status.runtime.jobs.length > 0) {
+      const schedules = status.runtime.jobs.map((job) =>
+        job.schedule.kind === "interval" ? job.schedule.every : job.schedule.expression
+      );
+      lines.push(`  scan jobs:     ${schedules.join(", ")}`);
+    }
   }
+  for (const health of status.execution) {
+    lines.push(`  health:        ${health.status}`);
+    if (health.lastStartedAt) lines.push(`  last started:  ${health.lastStartedAt}`);
+    if (health.lastSuccessAt) lines.push(`  last success:  ${health.lastSuccessAt}`);
+    if (health.lastErrorAt) lines.push(`  last error:    ${health.lastErrorAt}`);
+    if (health.consecutiveFailures > 0) {
+      lines.push(`  failures:      ${health.consecutiveFailures}`);
+    }
+  }
+  lines.push(`  pending events:${String(status.pendingEvents).padStart(2, " ")}`);
+  lines.push(`  failed events: ${String(status.failedEvents).padStart(2, " ")}`);
+  lines.push(`  failed hooks:  ${String(status.failedHookRuns).padStart(2, " ")}`);
   return lines.join("\n");
 }
 
@@ -65,12 +87,12 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
   switch (subcommand) {
     case "start": {
       const intervalStr = args.flags.interval ?? DEFAULT_INTERVAL;
-      const schedule = intervalToCron(intervalStr);
+      intervalToCron(intervalStr);
       const paths = resolvePaths(args.flags);
-      await cronStart(schedule, paths);
-      const next = cronNextRun(schedule);
+      await cronStart(intervalStr, paths);
+      const next = cronNextRun("* * * * *");
       if (next) {
-        outputText(`Next run: ${next.toISOString()}`);
+        outputText(`Next heartbeat tick: ${next.toISOString()}`);
       }
       break;
     }

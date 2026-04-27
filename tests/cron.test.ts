@@ -82,8 +82,8 @@ describe("renderCronStatus", () => {
     const text = renderCronStatus({
       jobTitle: "feeds-cli-feeds-abc123def456",
       registered: true,
-      schedule: "*/30 * * * *",
-      nextRun: new Date("2026-04-20T01:30:00.000Z"),
+      heartbeatSchedule: "* * * * *",
+      nextHeartbeatRun: new Date("2026-04-20T01:30:00.000Z"),
       runtimeState: "ok",
       runtime: {
         baseDir: "/tmp/feeds",
@@ -91,7 +91,22 @@ describe("renderCronStatus", () => {
         db: "/tmp/feeds/feeds.db",
         hooksDir: "/tmp/feeds/hooks/cron",
         hooksEnabled: false,
+        heartbeatSchedule: "* * * * *",
+        jobs: [
+          {
+            id: "job-1",
+            workspaceId: "/tmp/feeds",
+            pipelineId: "pipeline-1",
+            purpose: "scan",
+            schedule: { kind: "interval", every: "30m" },
+            enabled: true,
+          },
+        ],
       },
+      execution: [],
+      failedEvents: 0,
+      pendingEvents: 0,
+      failedHookRuns: 0,
     });
 
     expect(text).toContain("job title:     feeds-cli-feeds-abc123def456");
@@ -106,10 +121,14 @@ describe("renderCronStatus", () => {
     const text = renderCronStatus({
       jobTitle: "feeds-cli-feeds-abc123def456",
       registered: true,
-      schedule: "*/30 * * * *",
-      nextRun: new Date("2026-04-20T01:30:00.000Z"),
+      heartbeatSchedule: "* * * * *",
+      nextHeartbeatRun: new Date("2026-04-20T01:30:00.000Z"),
       runtimeState: "invalid",
       runtime: null,
+      execution: [],
+      failedEvents: 0,
+      pendingEvents: 0,
+      failedHookRuns: 0,
     });
 
     expect(text).toContain("runtime state: invalid");
