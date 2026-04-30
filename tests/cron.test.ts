@@ -3,7 +3,7 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { intervalToCron, maybeRunHooks, prepareCyclePaths } from "../src/cron/index";
-import { renderCronStatus } from "../src/cli/commands/cron";
+import { renderCronCheck, renderCronStatus } from "../src/cli/commands/cron";
 
 describe("intervalToCron", () => {
   test("converts minutes to cron expression", () => {
@@ -107,6 +107,17 @@ describe("renderCronStatus", () => {
       failedEvents: 0,
       pendingEvents: 0,
       failedHookRuns: 0,
+      check: {
+        ok: true,
+        exitCode: 0,
+        runtimeState: "ok",
+        health: "healthy",
+        lastSuccessAt: null,
+        pendingEvents: 0,
+        failedEvents: 0,
+        failedHookRuns: 0,
+        issues: [],
+      },
     });
 
     expect(text).toContain("job title:     feeds-cli-feeds-abc123def456");
@@ -129,6 +140,17 @@ describe("renderCronStatus", () => {
       failedEvents: 0,
       pendingEvents: 0,
       failedHookRuns: 0,
+      check: {
+        ok: false,
+        exitCode: 1,
+        runtimeState: "invalid",
+        health: "healthy",
+        lastSuccessAt: null,
+        pendingEvents: 0,
+        failedEvents: 0,
+        failedHookRuns: 0,
+        issues: [{ code: "runtime-invalid", message: "cron runtime state is invalid", jobId: null }],
+      },
     });
 
     expect(text).toContain("runtime state: invalid");
@@ -147,10 +169,79 @@ describe("renderCronStatus", () => {
       failedEvents: 0,
       pendingEvents: 0,
       failedHookRuns: 0,
+      check: {
+        ok: false,
+        exitCode: 1,
+        runtimeState: "outdated",
+        health: "healthy",
+        lastSuccessAt: null,
+        pendingEvents: 0,
+        failedEvents: 0,
+        failedHookRuns: 0,
+        issues: [{ code: "runtime-outdated", message: "cron runtime state requires repair", jobId: null }],
+      },
     });
 
     expect(text).toContain("runtime state: repair required");
     expect(text).toContain("runtime:       unavailable");
+  });
+
+
+  test("renders cron check success", () => {
+    const text = renderCronCheck({
+      jobTitle: "feeds-cli-feeds-abc123def456",
+      registered: true,
+      heartbeatSchedule: "* * * * *",
+      nextHeartbeatRun: null,
+      runtimeState: "ok",
+      runtime: null,
+      execution: [],
+      failedEvents: 0,
+      pendingEvents: 0,
+      failedHookRuns: 0,
+      check: {
+        ok: true,
+        exitCode: 0,
+        runtimeState: "ok",
+        health: "healthy",
+        lastSuccessAt: null,
+        pendingEvents: 0,
+        failedEvents: 0,
+        failedHookRuns: 0,
+        issues: [],
+      },
+    });
+
+    expect(text).toBe("cron ok: feeds-cli-feeds-abc123def456");
+  });
+
+  test("renders cron check failures", () => {
+    const text = renderCronCheck({
+      jobTitle: "feeds-cli-feeds-abc123def456",
+      registered: true,
+      heartbeatSchedule: "* * * * *",
+      nextHeartbeatRun: null,
+      runtimeState: "outdated",
+      runtime: null,
+      execution: [],
+      failedEvents: 0,
+      pendingEvents: 0,
+      failedHookRuns: 0,
+      check: {
+        ok: false,
+        exitCode: 1,
+        runtimeState: "outdated",
+        health: "healthy",
+        lastSuccessAt: null,
+        pendingEvents: 0,
+        failedEvents: 0,
+        failedHookRuns: 0,
+        issues: [{ code: "runtime-outdated", message: "cron runtime state requires repair", jobId: null }],
+      },
+    });
+
+    expect(text).toContain("cron check failed: feeds-cli-feeds-abc123def456");
+    expect(text).toContain("- runtime-outdated: cron runtime state requires repair");
   });
 
 });

@@ -280,6 +280,150 @@ export interface CronStatus {
   failedEvents: number;
   pendingEvents: number;
   failedHookRuns: number;
+  check: CronStatusCheck;
+}
+
+export type CronStatusCheckRuntimeState = CronRuntimeState["status"] | "not-registered" | "unknown";
+
+export interface CronStatusIssue {
+  code:
+    | "not-registered"
+    | "runtime-missing"
+    | "runtime-invalid"
+    | "runtime-outdated"
+    | "runtime-unknown"
+    | "job-never-ran"
+    | "job-degraded"
+    | "job-stale"
+    | "pending-events"
+    | "failed-events"
+    | "failed-hooks";
+  message: string;
+  jobId: JobExecutionHealth["jobId"] | null;
+}
+
+export interface CronStatusCheck {
+  ok: boolean;
+  exitCode: 0 | 1;
+  runtimeState: CronStatusCheckRuntimeState;
+  health: "healthy" | "unhealthy";
+  lastSuccessAt: string | null;
+  pendingEvents: number;
+  failedEvents: number;
+  failedHookRuns: number;
+  issues: CronStatusIssue[];
+}
+
+export function assessCronStatus(
+  status: Omit<CronStatus, "check">,
+): CronStatusCheck {
+  const issues: CronStatusIssue[] = [];
+  let runtimeState: CronStatusCheckRuntimeState = "unknown";
+
+  if (!status.registered) {
+    runtimeState = "not-registered";
+    issues.push({
+      code: "not-registered",
+      message: "cron job is not registered",
+      jobId: null,
+    });
+  } else if (status.runtimeState === null) {
+    issues.push({
+      code: "runtime-unknown",
+      message: "cron runtime state is unknown",
+      jobId: null,
+    });
+  } else {
+    runtimeState = status.runtimeState;
+    if (status.runtimeState === "missing") {
+      issues.push({
+        code: "runtime-missing",
+        message: "cron runtime state is missing",
+        jobId: null,
+      });
+    } else if (status.runtimeState === "invalid") {
+      issues.push({
+        code: "runtime-invalid",
+        message: "cron runtime state is invalid",
+        jobId: null,
+      });
+    } else if (status.runtimeState === "outdated") {
+      issues.push({
+        code: "runtime-outdated",
+        message: "cron runtime state requires repair",
+        jobId: null,
+      });
+    }
+  }
+
+  let lastSuccessAt: string | null = null;
+  let health: CronStatusCheck["health"] = "healthy";
+  for (const execution of status.execution) {
+    if (
+      execution.lastSuccessAt
+      && (lastSuccessAt === null || Date.parse(execution.lastSuccessAt) > Date.parse(lastSuccessAt))
+    ) {
+      lastSuccessAt = execution.lastSuccessAt;
+    }
+
+    if (execution.status === "healthy") {
+      continue;
+    }
+
+    health = "unhealthy";
+    issues.push({
+      code:
+        execution.status === "never-ran"
+          ? "job-never-ran"
+          : execution.status === "degraded"
+            ? "job-degraded"
+            : "job-stale",
+      message: `job ${execution.jobId} is ${execution.status}`,
+      jobId: execution.jobId,
+    });
+  }
+
+  if (status.pendingEvents > 0) {
+    issues.push({
+      code: "pending-events",
+      message: `${status.pendingEvents} pending events`,
+      jobId: null,
+    });
+  }
+  if (status.failedEvents > 0) {
+    issues.push({
+      code: "failed-events",
+      message: `${status.failedEvents} failed events`,
+      jobId: null,
+    });
+  }
+  if (status.failedHookRuns > 0) {
+    issues.push({
+      code: "failed-hooks",
+      message: `${status.failedHookRuns} failed hook runs`,
+      jobId: null,
+    });
+  }
+
+  const ok = issues.length === 0;
+  return {
+    ok,
+    exitCode: ok ? 0 : 1,
+    runtimeState,
+    health,
+    lastSuccessAt,
+    pendingEvents: status.pendingEvents,
+    failedEvents: status.failedEvents,
+    failedHookRuns: status.failedHookRuns,
+    issues,
+  };
+}
+
+function finalizeCronStatus(status: Omit<CronStatus, "check">): CronStatus {
+  return {
+    ...status,
+    check: assessCronStatus(status),
+  };
 }
 
 export async function cronStatus(baseDir: string): Promise<CronStatus> {
@@ -293,7 +437,7 @@ export async function cronStatus(baseDir: string): Promise<CronStatus> {
     return await cronStatusLinux(jobTitle);
   }
 
-  return {
+  return finalizeCronStatus({
     jobTitle,
     registered: false,
     heartbeatSchedule: null,
@@ -301,7 +445,7 @@ export async function cronStatus(baseDir: string): Promise<CronStatus> {
     runtimeState: null,
     runtime: null,
     ...emptyExecutionSnapshot(),
-  };
+  });
 }
 
 export async function cronRepair(
@@ -344,7 +488,7 @@ async function cronStatusMacOS(jobTitle: string): Promise<CronStatus> {
   const plistPath = `${process.env.HOME}/Library/LaunchAgents/bun.cron.${jobTitle}.plist`;
   const exists = await Bun.file(plistPath).exists();
   if (!exists) {
-    return {
+    return finalizeCronStatus({
       jobTitle,
       registered: false,
       heartbeatSchedule: null,
@@ -352,7 +496,7 @@ async function cronStatusMacOS(jobTitle: string): Promise<CronStatus> {
       runtimeState: null,
       runtime: null,
       ...emptyExecutionSnapshot(),
-    };
+    });
   }
 
   const proc = Bun.spawn(["launchctl", "list"], {
@@ -366,7 +510,7 @@ async function cronStatusMacOS(jobTitle: string): Promise<CronStatus> {
   const runtimeState = registered ? await loadCronRuntimeState(jobTitle) : null;
   const runtime = runtimeState?.status === "ok" ? runtimeState.runtime : null;
 
-  return {
+  return finalizeCronStatus({
     jobTitle,
     registered,
     heartbeatSchedule,
@@ -374,7 +518,7 @@ async function cronStatusMacOS(jobTitle: string): Promise<CronStatus> {
     runtimeState: runtimeState?.status ?? null,
     runtime,
     ...(runtime ? await executionSnapshot(runtime) : emptyExecutionSnapshot()),
-  };
+  });
 }
 
 async function extractScheduleFromPlist(plistPath: string): Promise<string | null> {
@@ -407,7 +551,7 @@ async function cronStatusLinux(jobTitle: string): Promise<CronStatus> {
       const nextHeartbeatRun = heartbeatSchedule ? Bun.cron.parse(heartbeatSchedule) : null;
       const runtimeState = await loadCronRuntimeState(jobTitle);
       const runtime = runtimeState.status === "ok" ? runtimeState.runtime : null;
-      return {
+      return finalizeCronStatus({
         jobTitle,
         registered: true,
         heartbeatSchedule,
@@ -415,11 +559,11 @@ async function cronStatusLinux(jobTitle: string): Promise<CronStatus> {
         runtimeState: runtimeState.status,
         runtime,
         ...(runtime ? await executionSnapshot(runtime) : emptyExecutionSnapshot()),
-      };
+      });
     }
   }
 
-  return {
+  return finalizeCronStatus({
     jobTitle,
     registered: false,
     heartbeatSchedule: null,
@@ -427,7 +571,7 @@ async function cronStatusLinux(jobTitle: string): Promise<CronStatus> {
     runtimeState: null,
     runtime: null,
     ...emptyExecutionSnapshot(),
-  };
+  });
 }
 
 async function executionSnapshot(runtime: CronRuntime): Promise<{

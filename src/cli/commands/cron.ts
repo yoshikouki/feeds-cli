@@ -24,6 +24,7 @@ Usage:
   feeds cron status                   Show cron job status and runtime
   feeds cron repair --interval 30m    Rebuild legacy runtime state with current schema
                                       Use --no-hooks for hooks-enabled legacy state
+  feeds cron check                    Exit non-zero when cron health is not OK
   feeds cron run                      Run one scan cycle (foreground)
 
 Global options:
@@ -31,6 +32,18 @@ Global options:
   --config <path>                     Config file path override
   --db <path>                         Database file path override
   --no-hooks                          Disable cron hooks for this run or saved cron runtime`;
+
+export function renderCronCheck(status: Awaited<ReturnType<typeof cronStatus>>): string {
+  if (status.check.ok) {
+    return `cron ok: ${status.jobTitle}`;
+  }
+
+  const lines = [`cron check failed: ${status.jobTitle}`];
+  for (const issue of status.check.issues) {
+    lines.push(`- ${issue.code}: ${issue.message}`);
+  }
+  return lines.join("\n");
+}
 
 export function renderCronStatus(status: Awaited<ReturnType<typeof cronStatus>>): string {
   if (!status.registered) {
@@ -122,6 +135,12 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
         `Cron runtime repaired with scan interval ${intervalStr} for ${runtime.baseDir}`
           + (runtime.hooksEnabled ? "" : " (hooks disabled)"),
       );
+      break;
+    }
+    case "check": {
+      const status = await cronStatus(resolvePaths(args.flags).base);
+      output(status, args.flags.format, renderCronCheck);
+      process.exitCode = status.check.exitCode;
       break;
     }
     case "run": {
