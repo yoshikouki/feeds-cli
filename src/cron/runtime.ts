@@ -10,7 +10,10 @@ import { cronJobTitle } from "./job-id.ts";
 import { defaultScheduledScanJob } from "../control-plane/identity.ts";
 import { HEARTBEAT_CRON_SCHEDULE } from "../control-plane/heartbeat.ts";
 
+export const CRON_RUNTIME_VERSION = 2;
+
 export interface CronRuntime {
+  version: typeof CRON_RUNTIME_VERSION;
   baseDir: string;
   config: string;
   db: string;
@@ -20,10 +23,19 @@ export interface CronRuntime {
   jobs: readonly ScheduledJobSpec[];
 }
 
+export interface LegacyCronRuntime {
+  baseDir: string;
+  config: string;
+  db: string;
+  hooksDir: string;
+  hooksEnabled: boolean;
+}
+
 export type CronRuntimeState =
-  | { status: "ok"; runtime: CronRuntime }
-  | { status: "missing"; runtime: null }
-  | { status: "invalid"; runtime: null };
+  | { status: "ok"; runtime: CronRuntime; legacyRuntime: null }
+  | { status: "missing"; runtime: null; legacyRuntime: null }
+  | { status: "invalid"; runtime: null; legacyRuntime: null }
+  | { status: "outdated"; runtime: null; legacyRuntime: LegacyCronRuntime };
 
 export function cronRuntimeStatePath(
   jobTitle: string,
@@ -44,6 +56,7 @@ export function runtimeFromPaths(
   jobs: readonly ScheduledJobSpec[] = [],
 ): CronRuntime {
   return {
+    version: CRON_RUNTIME_VERSION,
     baseDir: paths.base,
     config: paths.config,
     db: paths.db,
@@ -62,6 +75,16 @@ export function runtimeWithDefaultScanJob(
 }
 
 export function pathsFromRuntime(runtime: CronRuntime): ResolvedPaths {
+  return {
+    base: runtime.baseDir,
+    config: runtime.config,
+    db: runtime.db,
+    hooksDir: runtime.hooksDir,
+    hooksEnabled: runtime.hooksEnabled,
+  };
+}
+
+export function pathsFromLegacyRuntime(runtime: LegacyCronRuntime): ResolvedPaths {
   return {
     base: runtime.baseDir,
     config: runtime.config,
@@ -93,7 +116,7 @@ export async function loadCronRuntime(
 
   try {
     const parsed = JSON.parse(await file.text());
-    if (!isCronRuntime(parsed)) {
+    if (!isCurrentCronRuntime(parsed)) {
       return null;
     }
     return parsed;
@@ -117,17 +140,20 @@ export async function loadCronRuntimeState(
   const statePath = cronRuntimeStatePath(jobTitle, controlBaseDir);
   const file = Bun.file(statePath);
   if (!(await file.exists())) {
-    return { status: "missing", runtime: null };
+    return { status: "missing", runtime: null, legacyRuntime: null };
   }
 
   try {
     const parsed = JSON.parse(await file.text());
-    if (!isCronRuntime(parsed)) {
-      return { status: "invalid", runtime: null };
+    if (isCurrentCronRuntime(parsed)) {
+      return { status: "ok", runtime: parsed, legacyRuntime: null };
     }
-    return { status: "ok", runtime: parsed };
+    if (isLegacyCronRuntime(parsed)) {
+      return { status: "outdated", runtime: null, legacyRuntime: parsed };
+    }
+    return { status: "invalid", runtime: null, legacyRuntime: null };
   } catch {
-    return { status: "invalid", runtime: null };
+    return { status: "invalid", runtime: null, legacyRuntime: null };
   }
 }
 
@@ -140,20 +166,39 @@ export async function resolveCronPaths(
     return pathsFromRuntime(state.runtime);
   }
 
-  throw new Error(
-    state.status === "missing"
-      ? "Cron runtime state is missing"
-      : "Cron runtime state is invalid",
-  );
+  throw new Error(cronRuntimeStateError(state));
 }
 
-function isCronRuntime(value: unknown): value is CronRuntime {
+export function cronRuntimeStateError(state: Pick<CronRuntimeState, "status">): string {
+  switch (state.status) {
+    case "missing":
+      return "Cron runtime state is missing";
+    case "outdated":
+      return "Cron runtime state is outdated and requires repair";
+    case "invalid":
+      return "Cron runtime state is invalid";
+    case "ok":
+      return "Cron runtime state is current";
+  }
+}
+
+export function cronRuntimeStateDisplay(status: CronRuntimeState["status"]): string {
+  switch (status) {
+    case "outdated":
+      return "repair required";
+    default:
+      return status;
+  }
+}
+
+function isCurrentCronRuntime(value: unknown): value is CronRuntime {
   if (!value || typeof value !== "object") {
     return false;
   }
 
   const runtime = value as Partial<CronRuntime>;
   return (
+    runtime.version === CRON_RUNTIME_VERSION &&
     typeof runtime.baseDir === "string" &&
     typeof runtime.config === "string" &&
     typeof runtime.db === "string" &&
@@ -162,6 +207,22 @@ function isCronRuntime(value: unknown): value is CronRuntime {
     typeof runtime.heartbeatSchedule === "string" &&
     Array.isArray(runtime.jobs) &&
     runtime.jobs.every(isScheduledJobSpec)
+  );
+}
+
+function isLegacyCronRuntime(value: unknown): value is LegacyCronRuntime {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const runtime = value as Partial<LegacyCronRuntime & { version?: unknown }>;
+  return (
+    runtime.version === undefined &&
+    typeof runtime.baseDir === "string" &&
+    typeof runtime.config === "string" &&
+    typeof runtime.db === "string" &&
+    typeof runtime.hooksDir === "string" &&
+    typeof runtime.hooksEnabled === "boolean"
   );
 }
 

@@ -3,7 +3,11 @@ import { planDueJobs } from "../control-plane/heartbeat.ts";
 import { FeedDatabase } from "../db/index.ts";
 import { prepareCyclePaths, runCycle } from "./index.ts";
 import { currentCronJobTitle } from "./job-id.ts";
-import { pathsFromRuntime, loadCronRuntimeState } from "./runtime.ts";
+import {
+  cronRuntimeStateError,
+  loadCronRuntimeState,
+  pathsFromRuntime,
+} from "./runtime.ts";
 
 export default {
   async scheduled(controller: Bun.CronController) {
@@ -11,11 +15,7 @@ export default {
       const jobTitle = currentCronJobTitle(controller);
       const runtimeState = await loadCronRuntimeState(jobTitle);
       if (runtimeState.status !== "ok") {
-        throw new Error(
-          runtimeState.status === "missing"
-            ? "Cron runtime state is missing"
-            : "Cron runtime state is invalid",
-        );
+        throw new Error(cronRuntimeStateError(runtimeState));
       }
 
       const runtime = runtimeState.runtime;

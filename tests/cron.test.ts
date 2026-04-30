@@ -134,6 +134,25 @@ describe("renderCronStatus", () => {
     expect(text).toContain("runtime state: invalid");
     expect(text).toContain("runtime:       unavailable");
   });
+
+  test("shows outdated runtime state as repair required", () => {
+    const text = renderCronStatus({
+      jobTitle: "feeds-cli-feeds-abc123def456",
+      registered: true,
+      heartbeatSchedule: "* * * * *",
+      nextHeartbeatRun: new Date("2026-04-20T01:30:00.000Z"),
+      runtimeState: "outdated",
+      runtime: null,
+      execution: [],
+      failedEvents: 0,
+      pendingEvents: 0,
+      failedHookRuns: 0,
+    });
+
+    expect(text).toContain("runtime state: repair required");
+    expect(text).toContain("runtime:       unavailable");
+  });
+
 });
 
 describe("prepareCyclePaths", () => {

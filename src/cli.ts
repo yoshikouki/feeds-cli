@@ -36,7 +36,7 @@ Commands:
   read <id>          Show article content
   feeds              List registered feeds
   remove <name>      Remove a feed
-  cron <sub>         Scheduled scanning (start|stop|status|run)
+  cron <sub>         Scheduled scanning (start|stop|status|repair|run)
   log [cycles|scans] Show execution history
 
 Global options:

@@ -25,8 +25,10 @@ import { runHooks } from "./hooks.ts";
 import { cronJobTitle } from "./job-id.ts";
 import {
   clearCronRuntime,
+  cronRuntimeStateError,
   loadCronRuntime,
   loadCronRuntimeState,
+  pathsFromLegacyRuntime,
   runtimeWithDefaultScanJob,
   saveCronRuntime,
   type CronRuntime,
@@ -300,6 +302,42 @@ export async function cronStatus(baseDir: string): Promise<CronStatus> {
     runtime: null,
     ...emptyExecutionSnapshot(),
   };
+}
+
+export async function cronRepair(
+  baseDir: string,
+  every: string | undefined,
+  options: { hooksEnabled?: boolean; controlBaseDir?: string } = {},
+): Promise<CronRuntime> {
+  const jobTitle = cronJobTitle(baseDir);
+  const runtimeState = await loadCronRuntimeState(jobTitle, options.controlBaseDir);
+
+  if (runtimeState.status === "missing" || runtimeState.status === "invalid") {
+    throw new Error(`${cronRuntimeStateError(runtimeState)}; nothing to repair`);
+  }
+  if (runtimeState.status === "ok") {
+    throw new Error("Cron runtime state is already current; repair is not needed");
+  }
+  if (!every) {
+    throw new Error(
+      "Cron runtime repair requires --interval because legacy runtime state does not store scan schedule",
+    );
+  }
+
+  if (runtimeState.legacyRuntime.hooksEnabled && options.hooksEnabled !== false) {
+    throw new Error(
+      "Cron runtime repair refuses to re-enable hooks for legacy state; rerun with --no-hooks to avoid backfill notification spam",
+    );
+  }
+
+  intervalToCron(every);
+  const paths = pathsFromLegacyRuntime(runtimeState.legacyRuntime);
+  if (options.hooksEnabled !== undefined) {
+    paths.hooksEnabled = options.hooksEnabled;
+  }
+  const runtime = runtimeWithDefaultScanJob(paths, every);
+  await saveCronRuntime(runtime, jobTitle, options.controlBaseDir);
+  return runtime;
 }
 
 async function cronStatusMacOS(jobTitle: string): Promise<CronStatus> {

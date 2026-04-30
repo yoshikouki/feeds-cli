@@ -3,6 +3,7 @@ import { UsageError } from "../args.ts";
 import { output, outputText } from "../output.ts";
 import { resolvePaths } from "../../paths.ts";
 import {
+  cronRepair,
   intervalToCron,
   runCycle,
   cronStart,
@@ -11,6 +12,7 @@ import {
   cronNextRun,
   prepareCyclePaths,
 } from "../../cron/index.ts";
+import { cronRuntimeStateDisplay } from "../../cron/runtime.ts";
 
 const DEFAULT_INTERVAL = "30m";
 
@@ -20,6 +22,8 @@ Usage:
   feeds cron start [--interval 30m]   Register OS cron job with current runtime
   feeds cron stop                     Remove OS cron job
   feeds cron status                   Show cron job status and runtime
+  feeds cron repair --interval 30m    Rebuild legacy runtime state with current schema
+                                      Use --no-hooks for hooks-enabled legacy state
   feeds cron run                      Run one scan cycle (foreground)
 
 Global options:
@@ -42,7 +46,7 @@ export function renderCronStatus(status: Awaited<ReturnType<typeof cronStatus>>)
     lines.push(`  next tick:     ${status.nextHeartbeatRun.toISOString()}`);
   }
   if (status.runtimeState && status.runtimeState !== "ok") {
-    lines.push(`  runtime state: ${status.runtimeState}`);
+    lines.push(`  runtime state: ${cronRuntimeStateDisplay(status.runtimeState)}`);
     lines.push("  runtime:       unavailable");
     return lines.join("\n");
   }
@@ -102,6 +106,22 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
     case "status": {
       const status = await cronStatus(resolvePaths(args.flags).base);
       output(status, args.flags.format, renderCronStatus);
+      break;
+    }
+    case "repair": {
+      const intervalStr = args.flags.interval;
+      if (!intervalStr) {
+        throw new UsageError(
+          "Usage: feeds cron repair --interval <value>\nLegacy runtime state does not store scan schedule, so --interval is required.",
+        );
+      }
+      const runtime = await cronRepair(resolvePaths(args.flags).base, intervalStr, {
+        hooksEnabled: args.flags.noHooks ? false : undefined,
+      });
+      outputText(
+        `Cron runtime repaired with scan interval ${intervalStr} for ${runtime.baseDir}`
+          + (runtime.hooksEnabled ? "" : " (hooks disabled)"),
+      );
       break;
     }
     case "run": {

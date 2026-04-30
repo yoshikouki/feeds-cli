@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   clearCronRuntime,
+  CRON_RUNTIME_VERSION,
   cronRuntimeStatePath,
   loadCronRuntimeState,
   loadCronRuntime,
@@ -11,6 +12,7 @@ import {
   runtimeFromPaths,
   saveCronRuntime,
 } from "../src/cron/runtime";
+import { cronRepair } from "../src/cron/index";
 import { cronJobTitle } from "../src/cron/job-id";
 import { resolvePaths } from "../src/paths";
 
@@ -59,6 +61,7 @@ describe("cron runtime state", () => {
     expect(await loadCronRuntimeState(jobTitle, root)).toEqual({
       status: "missing",
       runtime: null,
+      legacyRuntime: null,
     });
     await expect(resolveCronPaths(jobTitle, root)).rejects.toThrow(
       "Cron runtime state is missing",
@@ -76,10 +79,79 @@ describe("cron runtime state", () => {
     expect(await loadCronRuntimeState(jobTitle, root)).toEqual({
       status: "invalid",
       runtime: null,
+      legacyRuntime: null,
     });
     await expect(resolveCronPaths(jobTitle, root)).rejects.toThrow(
       "Cron runtime state is invalid",
     );
+  });
+
+  test("reports legacy runtime state as outdated", async () => {
+    const root = await mkdtemp(join(tmpdir(), "feeds-cron-runtime-"));
+    tempRoots.push(root);
+    const jobTitle = cronJobTitle("/tmp/feeds-legacy");
+    const statePath = cronRuntimeStatePath(jobTitle, root);
+    const legacyRuntime = {
+      baseDir: "/tmp/feeds-legacy",
+      config: "/tmp/feeds-legacy/feeds.json5",
+      db: "/tmp/feeds-legacy/feeds.db",
+      hooksDir: "/tmp/feeds-legacy/hooks/cron",
+      hooksEnabled: true,
+    };
+
+    await Bun.write(statePath, JSON.stringify(legacyRuntime));
+
+    expect(await loadCronRuntime(jobTitle, root)).toBeNull();
+    expect(await loadCronRuntimeState(jobTitle, root)).toEqual({
+      status: "outdated",
+      runtime: null,
+      legacyRuntime,
+    });
+    await expect(resolveCronPaths(jobTitle, root)).rejects.toThrow(
+      "Cron runtime state is outdated and requires repair",
+    );
+  });
+
+
+  test("repair refuses hooks-enabled legacy runtime without --no-hooks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "feeds-cron-runtime-"));
+    tempRoots.push(root);
+    const baseDir = "/tmp/feeds-repair-refuse";
+    const jobTitle = cronJobTitle(baseDir);
+    const statePath = cronRuntimeStatePath(jobTitle, root);
+    await Bun.write(statePath, JSON.stringify({
+      baseDir,
+      config: `${baseDir}/feeds.json5`,
+      db: `${baseDir}/feeds.db`,
+      hooksDir: `${baseDir}/hooks/cron`,
+      hooksEnabled: true,
+    }));
+
+    await expect(cronRepair(baseDir, "5m", { controlBaseDir: root })).rejects.toThrow(
+      "--no-hooks",
+    );
+  });
+
+  test("repair can rewrite legacy runtime with hooks disabled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "feeds-cron-runtime-"));
+    tempRoots.push(root);
+    const baseDir = "/tmp/feeds-repair";
+    const jobTitle = cronJobTitle(baseDir);
+    const statePath = cronRuntimeStatePath(jobTitle, root);
+    await Bun.write(statePath, JSON.stringify({
+      baseDir,
+      config: `${baseDir}/feeds.json5`,
+      db: `${baseDir}/feeds.db`,
+      hooksDir: `${baseDir}/hooks/cron`,
+      hooksEnabled: true,
+    }));
+
+    const runtime = await cronRepair(baseDir, "5m", { hooksEnabled: false, controlBaseDir: root });
+
+    expect(runtime.version).toBe(CRON_RUNTIME_VERSION);
+    expect(runtime.hooksEnabled).toBe(false);
+    expect(runtime.jobs[0]?.schedule).toEqual({ kind: "interval", every: "5m" });
+    expect((await loadCronRuntimeState(jobTitle, root)).status).toBe("ok");
   });
 
   test("clears persisted runtime state", async () => {
@@ -109,5 +181,17 @@ describe("cron runtime state", () => {
     );
     expect(await loadCronRuntime(firstJobTitle, root)).toEqual(runtimeFromPaths(firstPaths));
     expect(await loadCronRuntime(secondJobTitle, root)).toEqual(runtimeFromPaths(secondPaths));
+  });
+
+  test("writes current runtime version when saving", async () => {
+    const root = await mkdtemp(join(tmpdir(), "feeds-cron-runtime-"));
+    tempRoots.push(root);
+    const paths = resolvePaths({ baseDir: "/tmp/feeds-versioned", noHooks: true });
+    const jobTitle = cronJobTitle(paths.base);
+
+    await saveCronRuntime(runtimeFromPaths(paths), jobTitle, root);
+
+    const saved = JSON.parse(await Bun.file(cronRuntimeStatePath(jobTitle, root)).text());
+    expect(saved.version).toBe(CRON_RUNTIME_VERSION);
   });
 });
