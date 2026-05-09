@@ -30,7 +30,7 @@ const HELP = `feeds-cli — UNIX-philosophy feed reader
 Usage: feeds <command> [options]
 
 Commands:
-  add <url>          Register a new feed
+  add <url>          Register a new feed and seed existing entries
   scan <name>|--all  Fetch and store articles
   list [name]        List articles
   read <id>          Show article content
@@ -44,6 +44,7 @@ Global options:
   --config <path>    Config file path
   --db <path>        Database file path
   --no-hooks         Disable cron hooks for this run or saved cron runtime
+  --no-seed          Skip feed seeding during add
   --format json      Output as JSON
   -h, --help         Show help
   -v, --version      Show version`;

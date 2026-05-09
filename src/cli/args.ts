@@ -10,6 +10,7 @@ export interface ParsedArgs {
     format: Format;
     help: boolean;
     noHooks: boolean;
+    noSeed: boolean;
     version: boolean;
     // command-specific
     name?: string;
@@ -21,6 +22,8 @@ export interface ParsedArgs {
     tag?: string;
     interval?: string;
     feed?: string;
+    sitemapInclude?: string[];
+    sitemapExclude?: string[];
   };
 }
 
@@ -46,6 +49,8 @@ const FLAGS_WITH_VALUE = new Set([
   "--tag",
   "--interval",
   "--feed",
+  "--sitemap-include",
+  "--sitemap-exclude",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -57,6 +62,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       format: "human",
       help: false,
       noHooks: false,
+      noSeed: false,
       version: false,
       all: false,
       unread: false,
@@ -76,6 +82,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       result.flags.help = true;
     } else if (token === "--no-hooks") {
       result.flags.noHooks = true;
+    } else if (token === "--no-seed") {
+      result.flags.noSeed = true;
     } else if (token === "--version") {
       result.flags.version = true;
     } else if (token === "--all") {
@@ -127,6 +135,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
           break;
         case "feed":
           result.flags.feed = value;
+          break;
+        case "sitemap-include":
+          result.flags.sitemapInclude = [...(result.flags.sitemapInclude ?? []), value];
+          break;
+        case "sitemap-exclude":
+          result.flags.sitemapExclude = [...(result.flags.sitemapExclude ?? []), value];
           break;
       }
     } else if (token.startsWith("-")) {

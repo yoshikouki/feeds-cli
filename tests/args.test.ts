@@ -40,4 +40,25 @@ describe("parseArgs", () => {
     expect(args.flags.db).toBe("/tmp/custom.db");
     expect(args.flags.noHooks).toBe(false);
   });
+
+  test("parses no-seed and repeatable sitemap filters", () => {
+    const args = parseArgs([
+      "bun",
+      "src/cli.ts",
+      "add",
+      "https://example.com/sitemap.xml",
+      "--no-seed",
+      "--sitemap-include",
+      "/posts/",
+      "--sitemap-include",
+      "/docs/",
+      "--sitemap-exclude",
+      "/drafts/",
+    ]);
+
+    expect(args.command).toBe("add");
+    expect(args.flags.noSeed).toBe(true);
+    expect(args.flags.sitemapInclude).toEqual(["/posts/", "/docs/"]);
+    expect(args.flags.sitemapExclude).toEqual(["/drafts/"]);
+  });
 });
