@@ -1,4 +1,17 @@
-import type { Format } from "./args.ts";
+import { UsageError, type Format } from "./args.ts";
+
+export interface CliErrorOutput {
+  error: {
+    code: "usage_error" | "runtime_error";
+    what: string;
+    why: string;
+    how: string;
+    details: {
+      message: string;
+      exitCode: number;
+    };
+  };
+}
 
 export function outputJson(data: unknown): void {
   console.log(JSON.stringify(data, null, 2));
@@ -10,6 +23,42 @@ export function outputText(text: string): void {
 
 export function outputError(message: string): void {
   console.error(`error: ${message}`);
+}
+
+export function formatCliError(error: unknown, exitCode: number): CliErrorOutput {
+  const message = error instanceof Error ? error.message : String(error);
+  const isUsageError = error instanceof UsageError;
+
+  return {
+    error: {
+      code: isUsageError ? "usage_error" : "runtime_error",
+      what: firstLine(message),
+      why: isUsageError
+        ? "The provided arguments do not match the CLI contract."
+        : "The command failed while executing.",
+      how: isUsageError
+        ? "Run 'feeds --help' or the command help, then retry with valid arguments."
+        : "Fix the underlying condition from the error message, then retry the command.",
+      details: {
+        message,
+        exitCode,
+      },
+    },
+  };
+}
+
+export function outputCliError(
+  error: unknown,
+  format: Format,
+  exitCode: number,
+): void {
+  if (format === "json") {
+    console.error(JSON.stringify(formatCliError(error, exitCode), null, 2));
+    return;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  outputError(message);
 }
 
 export function outputWarn(message: string): void {
@@ -60,4 +109,8 @@ export function formatDate(iso: string | null): string {
   if (days < 30) return `${days}d ago`;
 
   return date.toISOString().slice(0, 10);
+}
+
+function firstLine(message: string): string {
+  return message.split("\n", 1)[0] ?? message;
 }

@@ -86,6 +86,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       result.flags.noSeed = true;
     } else if (token === "--version") {
       result.flags.version = true;
+    } else if (token === "--json") {
+      result.flags.format = "json";
     } else if (token === "--all") {
       result.flags.all = true;
     } else if (token === "--unread") {

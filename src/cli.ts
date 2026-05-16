@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { parseArgs, UsageError, type ParsedArgs } from "./cli/args.ts";
-import { outputError } from "./cli/output.ts";
+import { outputCliError } from "./cli/output.ts";
 
 import { addCommand } from "./cli/commands/add.ts";
 import { feedsCommand } from "./cli/commands/feeds.ts";
@@ -45,7 +45,8 @@ Global options:
   --db <path>        Database file path
   --no-hooks         Disable cron hooks for this run or saved cron runtime
   --no-seed          Skip feed seeding during add
-  --format json      Output as JSON
+  --json             Output as JSON
+  --format json      Output as JSON (same as --json)
   -h, --help         Show help
   -v, --version      Show version`;
 
@@ -72,10 +73,24 @@ async function main() {
 }
 
 main().catch((err) => {
-  if (err instanceof UsageError) {
-    outputError(err.message);
-    process.exit(2);
-  }
-  outputError(err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  const exitCode = err instanceof UsageError ? 2 : 1;
+  const format = errorFormatFromArgv(process.argv);
+  outputCliError(err, format, exitCode);
+  process.exit(exitCode);
 });
+
+function errorFormatFromArgv(argv: string[]): ParsedArgs["flags"]["format"] {
+  const raw = argv.slice(2);
+
+  for (let i = 0; i < raw.length; i++) {
+    const token = raw[i];
+    if (token === "--json") {
+      return "json";
+    }
+    if ((token === "--format" || token === "-f") && raw[i + 1] === "json") {
+      return "json";
+    }
+  }
+
+  return "human";
+}

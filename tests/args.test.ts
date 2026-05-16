@@ -41,6 +41,18 @@ describe("parseArgs", () => {
     expect(args.flags.noHooks).toBe(false);
   });
 
+  test("parses --json as JSON output alias", () => {
+    const args = parseArgs([
+      "bun",
+      "src/cli.ts",
+      "list",
+      "--json",
+    ]);
+
+    expect(args.command).toBe("list");
+    expect(args.flags.format).toBe("json");
+  });
+
   test("parses no-seed and repeatable sitemap filters", () => {
     const args = parseArgs([
       "bun",
