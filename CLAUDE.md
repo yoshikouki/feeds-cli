@@ -21,6 +21,10 @@ bun test                 # Run all tests
 bun test tests/db.test.ts  # Run a single test file
 ```
 
+For machine-readable CLI output, use `--json`; `--format json` is kept as an
+alias. JSON-mode command failures are written to stderr as structured errors
+with `code`, `what`, `why`, `how`, and `details`.
+
 ## Bun Runtime Rules
 
 - Always use `bun` instead of `node`, `ts-node`, `npm`, `yarn`, `pnpm`, `npx`
