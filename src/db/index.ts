@@ -15,6 +15,7 @@ import type {
 } from "../contracts/control-plane.ts";
 import type { EventEnvelope, EventKind } from "../contracts/event.ts";
 import type {
+  HookId,
   HookRunId,
   IsoDateTimeString,
   JobId,
@@ -736,6 +737,40 @@ export class FeedDatabase implements Disposable {
     return row ? this.toJobRunRecord(row) : null;
   }
 
+  listJobRuns(filters?: {
+    workspaceId?: WorkspaceId;
+    limit?: number;
+    since?: string;
+  }): JobRunRecord[] {
+    const params: Array<string | number> = [];
+    const clauses: string[] = [];
+
+    if (filters?.workspaceId) {
+      clauses.push("workspace_id = ?");
+      params.push(filters.workspaceId);
+    }
+
+    if (filters?.since) {
+      clauses.push("started_at >= ?");
+      params.push(filters.since);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limit = filters?.limit ?? 20;
+    const rows = this.sqlite
+      .query(
+        `SELECT id, workspace_id, pipeline_id, job_id, purpose, triggered_by, status,
+                started_at, finished_at, duration_ms, error_message
+         FROM job_runs
+         ${where}
+         ORDER BY started_at DESC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as JobRunRow[];
+
+    return rows.map((row) => this.toJobRunRecord(row));
+  }
+
   jobExecutionHealth(job: ScheduledJobSpec, now: Date = new Date()): JobExecutionHealth {
     const recentRows = this.sqlite
       .query(
@@ -819,6 +854,40 @@ export class FeedDatabase implements Disposable {
          LIMIT ?`,
       )
       .all(workspaceId, limit) as EventRow[];
+    return rows.map((row) => this.toPersistedEventRecord(row));
+  }
+
+  listEvents(filters?: {
+    workspaceId?: WorkspaceId;
+    limit?: number;
+    since?: string;
+  }): PersistedEventRecord[] {
+    const params: Array<string | number> = [];
+    const clauses: string[] = [];
+
+    if (filters?.workspaceId) {
+      clauses.push("workspace_id = ?");
+      params.push(filters.workspaceId);
+    }
+
+    if (filters?.since) {
+      clauses.push("occurred_at >= ?");
+      params.push(filters.since);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limit = filters?.limit ?? 20;
+    const rows = this.sqlite
+      .query(
+        `SELECT id, workspace_id, pipeline_id, kind, status, payload, occurred_at,
+                attempt_count, last_dispatch_at, last_error
+         FROM events
+         ${where}
+         ORDER BY occurred_at DESC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as EventRow[];
+
     return rows.map((row) => this.toPersistedEventRecord(row));
   }
 
@@ -920,6 +989,40 @@ export class FeedDatabase implements Disposable {
       )
       .get(workspaceId) as { count: number | bigint };
     return Number(row?.count ?? 0);
+  }
+
+  listHookRuns(filters?: {
+    workspaceId?: WorkspaceId;
+    limit?: number;
+    since?: string;
+  }): HookRunRecord[] {
+    const params: Array<string | number> = [];
+    const clauses: string[] = [];
+
+    if (filters?.workspaceId) {
+      clauses.push("workspace_id = ?");
+      params.push(filters.workspaceId);
+    }
+
+    if (filters?.since) {
+      clauses.push("started_at >= ?");
+      params.push(filters.since);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limit = filters?.limit ?? 20;
+    const rows = this.sqlite
+      .query(
+        `SELECT id, event_id, workspace_id, pipeline_id, hook_key, status, attempt,
+                started_at, finished_at, duration_ms, exit_code, error_message
+         FROM hook_runs
+         ${where}
+         ORDER BY started_at DESC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as HookRunRow[];
+
+    return rows.map((row) => this.toHookRunRecord(row));
   }
 
   // ─── Articles ───
@@ -1570,6 +1673,24 @@ export class FeedDatabase implements Disposable {
       attemptCount: Number(row.attempt_count),
       lastDispatchAt: row.last_dispatch_at as IsoDateTimeString | null,
       lastError: row.last_error,
+    };
+  }
+
+  private toHookRunRecord(row: HookRunRow): HookRunRecord {
+    return {
+      id: row.id as HookRunId,
+      workspaceId: row.workspace_id as WorkspaceId,
+      pipelineId: row.pipeline_id as PipelineId,
+      eventId: row.event_id,
+      hookId: row.hook_key as HookId,
+      hookKey: row.hook_key,
+      attempt: Number(row.attempt),
+      status: row.status as HookRunStatus,
+      startedAt: row.started_at as IsoDateTimeString,
+      finishedAt: row.finished_at as IsoDateTimeString | null,
+      durationMs: row.duration_ms,
+      exitCode: row.exit_code,
+      errorMessage: row.error_message,
     };
   }
 }

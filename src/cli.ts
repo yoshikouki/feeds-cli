@@ -37,7 +37,8 @@ Commands:
   feeds              List registered feeds
   remove <name>      Remove a feed
   cron <sub>         Scheduled scanning (start|stop|status|repair|check|run)
-  log [cycles|scans] Show execution history
+  log [cycles|scans|events|hooks|jobs]
+                    Show execution and control-plane history
 
 Global options:
   --base-dir <path>  Base directory for config, db, and hooks

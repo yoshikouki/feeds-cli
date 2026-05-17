@@ -220,4 +220,111 @@ describe("control plane phase 1", () => {
       },
     ]);
   });
+
+  test("lists control-plane history by workspace", () => {
+    using db = new FeedDatabase(":memory:");
+    const baseDir = "/tmp/feeds-control-plane-history";
+    const otherBaseDir = "/tmp/feeds-control-plane-other";
+    const workspaceId = workspaceIdFromBaseDir(baseDir);
+    const pipelineId = defaultPipelineId(workspaceId);
+    const job = defaultScheduledScanJob(baseDir, "5m");
+    const otherWorkspaceId = workspaceIdFromBaseDir(otherBaseDir);
+    const otherPipelineId = defaultPipelineId(otherWorkspaceId);
+    const otherJob = defaultScheduledScanJob(otherBaseDir, "5m");
+    const eventId = crypto.randomUUID() as EventEnvelope["id"];
+    const otherEventId = crypto.randomUUID() as EventEnvelope["id"];
+
+    const jobRunId = db.insertJobRun({
+      workspaceId,
+      pipelineId,
+      jobId: job.id,
+      purpose: job.purpose,
+      triggeredBy: "manual",
+    });
+    db.finishJobRun(jobRunId, "success");
+    db.sqlite.run(
+      "UPDATE job_runs SET started_at = ?, finished_at = ?, duration_ms = ? WHERE id = ?",
+      ["2026-05-01T10:00:00.000Z", "2026-05-01T10:00:02.000Z", 2000, jobRunId],
+    );
+
+    db.insertJobRun({
+      workspaceId: otherWorkspaceId,
+      pipelineId: otherPipelineId,
+      jobId: otherJob.id,
+      purpose: otherJob.purpose,
+      triggeredBy: "manual",
+    });
+
+    db.insertEvent({
+      id: eventId,
+      kind: "cycle.completed",
+      workspaceId,
+      pipelineId,
+      occurredAt: "2026-05-01T10:00:03.000Z" as EventEnvelope["occurredAt"],
+      payload: {
+        scanRunId: "scan-1",
+        completedAt: "2026-05-01T10:00:03.000Z",
+        totalFeeds: 1,
+        totalNewEntries: 2,
+        durationMs: 2000,
+        hadErrors: false,
+      },
+    });
+    db.markEventDispatched(eventId);
+
+    db.insertEvent({
+      id: otherEventId,
+      kind: "cycle.completed",
+      workspaceId: otherWorkspaceId,
+      pipelineId: otherPipelineId,
+      occurredAt: "2026-05-01T10:00:04.000Z" as EventEnvelope["occurredAt"],
+      payload: {
+        scanRunId: "scan-2",
+        completedAt: "2026-05-01T10:00:04.000Z",
+        totalFeeds: 1,
+        totalNewEntries: 0,
+        durationMs: 1000,
+        hadErrors: false,
+      },
+    });
+
+    db.recordHookRun({
+      eventId,
+      workspaceId,
+      pipelineId,
+      hookKey: "/tmp/on-cycle-complete.sh",
+      attempt: 1,
+      status: "success",
+      startedAt: "2026-05-01T10:00:04.000Z",
+      finishedAt: "2026-05-01T10:00:05.000Z",
+      exitCode: 0,
+      errorMessage: null,
+    });
+    db.recordHookRun({
+      eventId: otherEventId,
+      workspaceId: otherWorkspaceId,
+      pipelineId: otherPipelineId,
+      hookKey: "/tmp/other-hook.sh",
+      attempt: 1,
+      status: "success",
+      startedAt: "2026-05-01T10:00:06.000Z",
+      finishedAt: "2026-05-01T10:00:07.000Z",
+      exitCode: 0,
+      errorMessage: null,
+    });
+
+    expect(db.listJobRuns({ workspaceId }).map((run) => run.id)).toEqual([jobRunId]);
+    expect(db.listEvents({ workspaceId }).map((record) => record.event.id)).toEqual([eventId]);
+    expect(db.listHookRuns({ workspaceId }).map((run) => run.eventId)).toEqual([eventId]);
+
+    expect(db.listEvents({ workspaceId, since: "2026-05-01T10:00:04.000Z" })).toEqual([]);
+    expect(db.listHookRuns({ workspaceId, limit: 1 })).toEqual([
+      expect.objectContaining({
+        eventId,
+        hookKey: "/tmp/on-cycle-complete.sh",
+        attempt: 1,
+        exitCode: 0,
+      }),
+    ]);
+  });
 });

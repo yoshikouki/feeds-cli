@@ -34,6 +34,16 @@ feeds list --json
 feeds cron status --format json
 ```
 
+実行履歴と control-plane の状態変化は `feeds log` で確認できます。
+
+```bash
+feeds log cycles --json
+feeds log scans --json
+feeds log events --json
+feeds log hooks --json
+feeds log jobs --json
+```
+
 JSON モードでコマンドが失敗した場合、stderr に `what` / `why` / `how`
 を含む構造化エラーを出力します。
 

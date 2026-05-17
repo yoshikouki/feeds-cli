@@ -116,7 +116,13 @@ CLI flags `--config`/`--db` override individual file paths.
 
 **Observability:**
 - **scan_log**: id (PK), feed_source_id (FK), scanned_at, status, article_count, error_message, duration_ms
+- **job_runs**: scheduled job attempts, status, trigger, duration, error_message
+- **events**: persisted runtime events and dispatch status
+- **hook_runs**: hook execution attempts, exit code, duration, error_message
 - **canonical_articles_fts**: FTS5 standalone (canonical_article_id UNINDEXED, title, summary, content)
+
+Use `feeds log cycles|scans|events|hooks|jobs --json` to inspect execution and
+control-plane history from the CLI.
 
 ### Dependencies
 
