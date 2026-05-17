@@ -126,6 +126,12 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
       if (!intervalStr) {
         throw new UsageError(
           "Usage: feeds cron repair --interval <value>\nLegacy runtime state does not store scan schedule, so --interval is required.",
+          {
+            code: "usage.missing_flag_value",
+            reason: "Cron runtime repair needs the scan interval because legacy runtime state did not store it.",
+            suggestedAction: "Rerun with --interval, for example 'feeds cron repair --interval 30m'.",
+            context: { command: "cron repair", flag: "--interval" },
+          },
         );
       }
       const runtime = await cronRepair(resolvePaths(args.flags).base, intervalStr, {
@@ -152,6 +158,12 @@ export async function cronCommand(args: ParsedArgs): Promise<void> {
     default:
       throw new UsageError(
         `Unknown cron subcommand: ${subcommand}\n${CRON_HELP}`,
+        {
+          code: "usage.unknown_cron_subcommand",
+          reason: "The cron command does not recognize the requested subcommand.",
+          suggestedAction: "Run 'feeds cron' to list supported cron subcommands.",
+          context: { subcommand },
+        },
       );
   }
 }

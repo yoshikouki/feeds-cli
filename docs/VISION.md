@@ -26,8 +26,9 @@ The entire collect → manage → extract → deduplicate cycle works without an
 
 Machine-readable output is exposed through `--json`; `--format json` remains
 available as a compatibility alias. In JSON mode, command failures use a
-structured error envelope with `what`, `why`, and `how` fields so agents can
-decide whether to retry, repair input, or stop.
+structured diagnostic envelope with `summary`, `reason`, and `suggestedAction`
+fields so agents can decide whether to retry, repair input, or stop. Human-mode
+errors render the same diagnostic as `error`, `reason`, and `next` lines.
 
 ### Human-friendly where humans touch, machine-friendly where machines touch
 

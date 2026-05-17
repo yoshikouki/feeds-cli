@@ -1,5 +1,6 @@
 import type { ParsedArgs } from "../args.ts";
 import { UsageError } from "../args.ts";
+import { CliError } from "../diagnostic.ts";
 import { output, outputInfo, outputWarn } from "../output.ts";
 import { resolvePaths, ensureDir } from "../../paths.ts";
 import { loadConfig, saveConfig, normalizeFeedDefinition } from "../../config/index.ts";
@@ -36,16 +37,33 @@ export async function addCommand(
   deps: AddCommandDeps = defaultDeps,
 ): Promise<void> {
   const url = args.positionals[0];
-  if (!url) throw new UsageError("Usage: feeds add <url> [--name NAME] [--no-seed]");
+  if (!url) {
+    throw new UsageError("Usage: feeds add <url> [--name NAME] [--no-seed]", {
+      code: "usage.missing_argument",
+      reason: "The add command needs a feed URL.",
+      suggestedAction: "Pass an http or https feed URL.",
+      context: { command: "add", argument: "url" },
+    });
+  }
 
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new UsageError(`Unsupported URL scheme: ${parsed.protocol}`);
+      throw new UsageError(`Unsupported URL scheme: ${parsed.protocol}`, {
+        code: "usage.unsupported_url_scheme",
+        reason: "feeds-cli can only fetch feeds over http or https.",
+        suggestedAction: "Use an http:// or https:// URL.",
+        context: { url, scheme: parsed.protocol },
+      });
     }
   } catch (e) {
     if (e instanceof UsageError) throw e;
-    throw new UsageError(`Invalid URL: ${url}`);
+    throw new UsageError(`Invalid URL: ${url}`, {
+      code: "usage.invalid_url",
+      reason: "The provided value could not be parsed as a URL.",
+      suggestedAction: "Pass a valid http:// or https:// URL.",
+      context: { url },
+    });
   }
 
   const paths = resolvePaths(args.flags);
@@ -84,7 +102,13 @@ async function addFeedAndMaybeSeed(
   try {
     kind = detectFeedFormat(raw);
   } catch {
-    throw new Error(`Could not detect feed format from ${url}`);
+    throw new CliError(`Could not detect feed format from ${url}`, {
+      code: "parser.unsupported_format",
+      category: "parser",
+      reason: "The fetched content did not match a supported feed format.",
+      suggestedAction: "Check the URL and make sure it points to RSS, Atom, JSON Feed, or Sitemap content.",
+      context: { url },
+    });
   }
 
   const name = args.flags.name ?? deriveNameFromUrl(url);
@@ -101,7 +125,13 @@ async function addFeedAndMaybeSeed(
 
   const config = await loadConfig(paths.config);
   if (config.feeds.some((f) => f.name === feedDef.name)) {
-    throw new Error(`Feed "${feedDef.name}" already exists`);
+    throw new CliError(`Feed "${feedDef.name}" already exists`, {
+      code: "config.feed_already_exists",
+      category: "config",
+      reason: "A feed with the derived or provided name is already registered.",
+      suggestedAction: "Choose a different name with --name or remove the existing feed first.",
+      context: { feedName: feedDef.name, config: paths.config },
+    });
   }
 
   using db = new FeedDatabase(paths.db);
@@ -113,7 +143,13 @@ async function addFeedAndMaybeSeed(
   if (!args.flags.noSeed) {
     const result = await deps.scanFeed(db, feedDef);
     if (result.errors.length > 0) {
-      throw new Error(`Seed failed: ${result.errors.join("; ")}`);
+      throw new CliError(`Seed failed: ${result.errors.join("; ")}`, {
+        code: "runtime.seed_failed",
+        category: "runtime",
+        reason: "The feed was registered, but the initial scan reported one or more errors.",
+        suggestedAction: "Inspect the seed error, fix the source if needed, then run 'feeds scan <name>'.",
+        context: { feedName: feedDef.name },
+      });
     }
     outputInfo(
       `Seeded ${result.articlesInserted} existing articles from ${result.articlesFound} found.`,
@@ -224,7 +260,12 @@ function sitemapConfigFromFlags(
   }
 
   if (kind !== "sitemap") {
-    throw new UsageError("--sitemap-include/--sitemap-exclude can only be used with sitemap sources");
+    throw new UsageError("--sitemap-include/--sitemap-exclude can only be used with sitemap sources", {
+      code: "usage.invalid_option_combination",
+      reason: "Sitemap URL filters only apply when the source is detected as a sitemap.",
+      suggestedAction: "Use these flags with a sitemap URL, or omit them for RSS, Atom, and JSON Feed sources.",
+      context: { kind },
+    });
   }
 
   for (const pattern of [...include, ...exclude]) {
@@ -232,7 +273,12 @@ function sitemapConfigFromFlags(
       new RegExp(pattern);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new UsageError(`Invalid sitemap regex "${pattern}": ${message}`);
+      throw new UsageError(`Invalid sitemap regex "${pattern}": ${message}`, {
+        code: "usage.invalid_pattern",
+        reason: "The sitemap filter pattern is not a valid regular expression.",
+        suggestedAction: "Fix the pattern passed to --sitemap-include or --sitemap-exclude.",
+        context: { pattern },
+      });
     }
   }
 

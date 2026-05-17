@@ -1,16 +1,12 @@
-import { UsageError, type Format } from "./args.ts";
+import type { Format } from "./args.ts";
+import {
+  toCliDiagnostic,
+  type CliDiagnostic,
+  type CliExitCode,
+} from "./diagnostic.ts";
 
 export interface CliErrorOutput {
-  error: {
-    code: "usage_error" | "runtime_error";
-    what: string;
-    why: string;
-    how: string;
-    details: {
-      message: string;
-      exitCode: number;
-    };
-  };
+  error: CliDiagnostic;
 }
 
 export function outputJson(data: unknown): void {
@@ -25,40 +21,39 @@ export function outputError(message: string): void {
   console.error(`error: ${message}`);
 }
 
-export function formatCliError(error: unknown, exitCode: number): CliErrorOutput {
-  const message = error instanceof Error ? error.message : String(error);
-  const isUsageError = error instanceof UsageError;
+export function formatCliError(error: unknown, exitCode: CliExitCode): CliErrorOutput {
+  return { error: toCliDiagnostic(error, exitCode) };
+}
 
-  return {
-    error: {
-      code: isUsageError ? "usage_error" : "runtime_error",
-      what: firstLine(message),
-      why: isUsageError
-        ? "The provided arguments do not match the CLI contract."
-        : "The command failed while executing.",
-      how: isUsageError
-        ? "Run 'feeds --help' or the command help, then retry with valid arguments."
-        : "Fix the underlying condition from the error message, then retry the command.",
-      details: {
-        message,
-        exitCode,
-      },
-    },
-  };
+export function formatCliDiagnosticText(diagnostic: CliDiagnostic): string {
+  const lines = [
+    `error[${diagnostic.code}]: ${diagnostic.summary}`,
+    `reason: ${diagnostic.reason}`,
+    `next: ${diagnostic.suggestedAction}`,
+  ];
+
+  if (diagnostic.context && Object.keys(diagnostic.context).length > 0) {
+    lines.push("context:");
+    for (const [key, value] of Object.entries(diagnostic.context)) {
+      lines.push(`  ${key}: ${String(value)}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 export function outputCliError(
   error: unknown,
   format: Format,
-  exitCode: number,
+  exitCode: CliExitCode,
 ): void {
+  const diagnostic = toCliDiagnostic(error, exitCode);
   if (format === "json") {
-    console.error(JSON.stringify(formatCliError(error, exitCode), null, 2));
+    console.error(JSON.stringify({ error: diagnostic }, null, 2));
     return;
   }
 
-  const message = error instanceof Error ? error.message : String(error);
-  outputError(message);
+  console.error(formatCliDiagnosticText(diagnostic));
 }
 
 export function outputWarn(message: string): void {
@@ -109,8 +104,4 @@ export function formatDate(iso: string | null): string {
   if (days < 30) return `${days}d ago`;
 
   return date.toISOString().slice(0, 10);
-}
-
-function firstLine(message: string): string {
-  return message.split("\n", 1)[0] ?? message;
 }

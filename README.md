@@ -44,22 +44,34 @@ feeds log hooks --json
 feeds log jobs --json
 ```
 
-JSON モードでコマンドが失敗した場合、stderr に `what` / `why` / `how`
-を含む構造化エラーを出力します。
+コマンドが失敗した場合、stderr に原因と次の行動を含む診断情報を出力します。
+JSON モードでは同じ診断情報を構造化して返します。
 
 ```json
 {
   "error": {
-    "code": "usage_error",
-    "what": "Unknown command: nope",
-    "why": "The provided arguments do not match the CLI contract.",
-    "how": "Run 'feeds --help' or the command help, then retry with valid arguments.",
-    "details": {
-      "message": "Unknown command: nope\nRun 'feeds --help' for usage.",
-      "exitCode": 2
+    "schemaVersion": 1,
+    "code": "usage.unknown_command",
+    "category": "usage",
+    "summary": "Unknown command: nope",
+    "reason": "The requested command is not registered.",
+    "suggestedAction": "Run 'feeds --help' to list available commands.",
+    "exitCode": 2,
+    "context": {
+      "command": "nope"
     }
   }
 }
+```
+
+非 JSON モードでは次のように表示します。
+
+```text
+error[usage.unknown_command]: Unknown command: nope
+reason: The requested command is not registered.
+next: Run 'feeds --help' to list available commands.
+context:
+  command: nope
 ```
 
 ## 設定ファイル

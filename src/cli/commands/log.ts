@@ -33,7 +33,12 @@ export async function logCommand(args: ParsedArgs): Promise<void> {
       await logJobs(args, paths);
       return;
     default:
-      throw new UsageError(`Unknown log subcommand: ${subcommand}`);
+      throw new UsageError(`Unknown log subcommand: ${subcommand}`, {
+        code: "usage.unknown_log_subcommand",
+        reason: "The log command only supports cycles, scans, events, hooks, and jobs.",
+        suggestedAction: "Run 'feeds log cycles', 'feeds log scans', 'feeds log events', 'feeds log hooks', or 'feeds log jobs'.",
+        context: { subcommand },
+      });
   }
 }
 

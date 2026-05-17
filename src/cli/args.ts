@@ -1,3 +1,8 @@
+import {
+  CliError,
+  type CliDiagnosticContext,
+} from "./diagnostic.ts";
+
 export type Format = "human" | "json";
 
 export interface ParsedArgs {
@@ -95,7 +100,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (FLAGS_WITH_VALUE.has(token)) {
       const value = raw[++i];
       if (value === undefined) {
-        throw new UsageError(`Flag ${token} requires a value`);
+        throw new UsageError(`Flag ${token} requires a value`, {
+          code: "usage.missing_flag_value",
+          reason: "The flag requires a value but none was provided.",
+          suggestedAction: `Provide a value after ${token}.`,
+          context: { flag: token },
+        });
       }
       const key = token.slice(2); // strip --
       switch (key) {
@@ -110,7 +120,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
           break;
         case "format":
           if (value !== "json" && value !== "human") {
-            throw new UsageError(`Invalid format: ${value} (expected json or human)`);
+            throw new UsageError(`Invalid format: ${value} (expected json or human)`, {
+              code: "usage.invalid_flag_value",
+              reason: "The --format flag only accepts json or human.",
+              suggestedAction: "Use --json, --format json, or --format human.",
+              context: { flag: "--format", value },
+            });
           }
           result.flags.format = value;
           break;
@@ -120,7 +135,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
         case "limit":
           result.flags.limit = Number(value);
           if (!Number.isFinite(result.flags.limit) || result.flags.limit < 1) {
-            throw new UsageError(`Invalid limit: ${value}`);
+            throw new UsageError(`Invalid limit: ${value}`, {
+              code: "usage.invalid_flag_value",
+              reason: "The --limit flag must be a positive number.",
+              suggestedAction: "Pass a positive number to --limit.",
+              context: { flag: "--limit", value },
+            });
           }
           break;
         case "search":
@@ -146,7 +166,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
           break;
       }
     } else if (token.startsWith("-")) {
-      throw new UsageError(`Unknown flag: ${token}`);
+      throw new UsageError(`Unknown flag: ${token}`, {
+        code: "usage.unknown_flag",
+        reason: "The flag is not recognized by feeds-cli.",
+        suggestedAction: "Run 'feeds --help' to list supported flags.",
+        context: { flag: token },
+      });
     } else if (result.command === null) {
       result.command = token;
     } else {
@@ -159,9 +184,24 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return result;
 }
 
-export class UsageError extends Error {
-  constructor(message: string) {
-    super(message);
+export interface UsageErrorOptions {
+  readonly code?: string;
+  readonly reason?: string;
+  readonly suggestedAction?: string;
+  readonly context?: CliDiagnosticContext;
+}
+
+export class UsageError extends CliError {
+  constructor(message: string, options: UsageErrorOptions = {}) {
+    super(message, {
+      code: options.code ?? "usage.invalid",
+      category: "usage",
+      reason: options.reason ?? "The provided arguments do not match the CLI contract.",
+      suggestedAction: options.suggestedAction
+        ?? "Run 'feeds --help' or the command help, then retry with valid arguments.",
+      exitCode: 2,
+      context: options.context,
+    });
     this.name = "UsageError";
   }
 }

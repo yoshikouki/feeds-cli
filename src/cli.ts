@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { parseArgs, UsageError, type ParsedArgs } from "./cli/args.ts";
+import type { CliExitCode } from "./cli/diagnostic.ts";
 import { outputCliError } from "./cli/output.ts";
 
 import { addCommand } from "./cli/commands/add.ts";
@@ -67,14 +68,19 @@ async function main() {
 
   const command = COMMANDS[args.command];
   if (!command) {
-    throw new UsageError(`Unknown command: ${args.command}\nRun 'feeds --help' for usage.`);
+    throw new UsageError(`Unknown command: ${args.command}`, {
+      code: "usage.unknown_command",
+      reason: "The requested command is not registered.",
+      suggestedAction: "Run 'feeds --help' to list available commands.",
+      context: { command: args.command },
+    });
   }
 
   await command(args);
 }
 
 main().catch((err) => {
-  const exitCode = err instanceof UsageError ? 2 : 1;
+  const exitCode: CliExitCode = err instanceof UsageError ? 2 : 1;
   const format = errorFormatFromArgv(process.argv);
   outputCliError(err, format, exitCode);
   process.exit(exitCode);
