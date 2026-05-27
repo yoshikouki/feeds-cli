@@ -87,12 +87,23 @@ context:
           name: "main",
           url: "https://news.ycombinator.com/rss",
           tags: ["tech"],
+          hooks: {
+            exclude: [
+              { title: "/\\bbeta\\b/i" },
+            ],
+          },
         },
       ],
     },
   ],
 }
 ```
+
+`sources[].hooks.include` / `sources[].hooks.exclude` は `entry.discovered`
+由来の `on-new-articles.*` フックに渡す記事を絞り込みます。記事自体は
+SQLite に保存されます。`include` がある場合はどれかのルールに一致した
+記事だけがフック候補になり、`exclude` は常に最終的に抑制します。現在の
+ルール対象は `title` / `url` / `summary` です。
 
 ## 開発
 

@@ -18,6 +18,7 @@ import {
 } from "../control-plane/identity.ts";
 import { HEARTBEAT_CRON_SCHEDULE } from "../control-plane/heartbeat.ts";
 import { FeedDatabase } from "../db/index.ts";
+import { sourceHookConfigsFromConfig } from "../hooks/filter.ts";
 import { ensureDir, type ResolvedPaths } from "../paths.ts";
 import { scanFeed, type ScanResult } from "../scanner.ts";
 import type { CycleTrigger } from "../types.ts";
@@ -73,6 +74,7 @@ export async function runCycle(
   const config = await loadConfig(paths.config);
   const workspaceId = workspaceIdFromBaseDir(paths.base);
   const pipelineId = defaultPipelineId(workspaceId);
+  const sourceHookConfigs = sourceHookConfigsFromConfig(config);
 
   if (config.feeds.length === 0) {
     outputWarn("No feeds in config, skipping cycle.");
@@ -158,7 +160,7 @@ export async function runCycle(
             "entry.discovered",
             {
               entryId: article.id as EntryDiscoveredPayload["entryId"],
-              sourceId: (sourceIds[0] ?? "") as EntryDiscoveredPayload["sourceId"],
+              sourceId: article.sourceId as EntryDiscoveredPayload["sourceId"],
               scanRunId: cycleId as EntryDiscoveredPayload["scanRunId"],
               discoveredAt: nowIso(),
               feedId: feedId || result.feedId,
@@ -204,7 +206,7 @@ export async function runCycle(
       ),
     );
 
-    await dispatchPendingEvents(db, paths);
+    await dispatchPendingEvents(db, { ...paths, sourceHookConfigs });
     db.pruneLogs();
     outputInfo(`Cycle complete: ${totalNew} new articles in ${durationMs}ms`);
   } catch (err) {

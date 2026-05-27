@@ -132,6 +132,62 @@ describe("control plane phase 1", () => {
     expect(Number(hookRunCount.count)).toBe(1);
   });
 
+  test("dispatchPendingEvents skips entry hooks excluded by source hook rules", async () => {
+    const root = await mkdtemp(join(tmpdir(), "feeds-control-plane-filter-"));
+    tempRoots.push(root);
+    const hooksDir = join(root, "hooks");
+    const outFile = join(root, "hook-output.json");
+    const dbPath = join(root, "feeds.db");
+
+    await mkdir(hooksDir, { recursive: true });
+    await writeFile(
+      join(hooksDir, "on-new-articles.sh"),
+      `#!/bin/sh\ncat > "${outFile}"\n`,
+      { mode: 0o755 },
+    );
+
+    using db = new FeedDatabase(dbPath);
+    const workspaceId = workspaceIdFromBaseDir(root);
+    const pipelineId = defaultPipelineId(workspaceId);
+
+    db.insertEvent({
+      id: crypto.randomUUID() as EventEnvelope["id"],
+      kind: "entry.discovered",
+      workspaceId,
+      pipelineId,
+      occurredAt: new Date().toISOString() as EventEnvelope["occurredAt"],
+      payload: {
+        entryId: "entry-1",
+        sourceId: "source-1",
+        scanRunId: "scan-1",
+        discoveredAt: new Date().toISOString(),
+        feedId: "feed-1",
+        feedName: "openclaw",
+        title: "OpenClaw beta release",
+        url: "https://example.com/releases/beta",
+        publishedAt: null,
+        summary: "Preview release",
+      },
+    });
+
+    await dispatchPendingEvents(db, {
+      base: root,
+      hooksDir,
+      hooksEnabled: true,
+      sourceHookConfigs: new Map([
+        ["source-1", { exclude: [{ title: "/beta/i" }] }],
+      ]),
+    });
+
+    expect(await Bun.file(outFile).exists()).toBe(false);
+    expect(db.countEventsByStatus(workspaceId, "dispatched")).toBe(1);
+
+    const hookRunCount = db.sqlite
+      .query("SELECT COUNT(*) as count FROM hook_runs")
+      .get() as { count: number | bigint };
+    expect(Number(hookRunCount.count)).toBe(0);
+  });
+
   test("failed event retry skips hooks that already succeeded", async () => {
     const root = await mkdtemp(join(tmpdir(), "feeds-control-plane-retry-"));
     tempRoots.push(root);
