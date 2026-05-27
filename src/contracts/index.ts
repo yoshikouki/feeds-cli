@@ -8,6 +8,8 @@ export type {
   HookId,
   BatchId,
   JobId,
+  JobRunId,
+  HookRunId,
   ScanRunId,
   IsoDateTimeString,
   JsonPrimitive,
@@ -29,7 +31,21 @@ export type {
   BatchReadyPayload,
   BatchReadyEvent,
   FeedEvent,
+  ScanStartedPayload,
+  ScanStartedEvent,
+  CycleCompletedPayload,
+  CycleCompletedEvent,
 } from "./event.ts";
+
+export type {
+  JobRunStatus,
+  PersistedEventStatus,
+  HookRunStatus,
+  JobRunRecord,
+  PersistedEventRecord,
+  HookRunRecord,
+  JobExecutionHealth,
+} from "./control-plane.ts";
 
 export type {
   HookCondition,

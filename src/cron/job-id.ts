@@ -43,6 +43,7 @@ export function extractCronJobTitleFromArgv(argv: string[]): string | null {
 export function currentCronJobTitle(
   controller?: Bun.CronController,
   argv: string[] = Bun.argv,
+  execArgv: string[] = process.execArgv,
 ): string {
   const controllerTitle = cronControllerTitle(controller);
   if (controllerTitle) {
@@ -52,6 +53,11 @@ export function currentCronJobTitle(
   const argvTitle = extractCronJobTitleFromArgv(argv);
   if (argvTitle) {
     return argvTitle;
+  }
+
+  const execArgvTitle = extractCronJobTitleFromArgv(execArgv);
+  if (execArgvTitle) {
+    return execArgvTitle;
   }
 
   throw new Error("Cron job title is missing");

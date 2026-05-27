@@ -10,6 +10,8 @@ export type EventId = Brand<string, "EventId">;
 export type HookId = Brand<string, "HookId">;
 export type BatchId = Brand<string, "BatchId">;
 export type JobId = Brand<string, "JobId">;
+export type JobRunId = Brand<string, "JobRunId">;
+export type HookRunId = Brand<string, "HookRunId">;
 export type ScanRunId = Brand<string, "ScanRunId">;
 
 export type IsoDateTimeString = Brand<string, "IsoDateTimeString">;

@@ -1,4 +1,13 @@
 import type { Format } from "./args.ts";
+import {
+  toCliDiagnostic,
+  type CliDiagnostic,
+  type CliExitCode,
+} from "./diagnostic.ts";
+
+export interface CliErrorOutput {
+  error: CliDiagnostic;
+}
 
 export function outputJson(data: unknown): void {
   console.log(JSON.stringify(data, null, 2));
@@ -10,6 +19,41 @@ export function outputText(text: string): void {
 
 export function outputError(message: string): void {
   console.error(`error: ${message}`);
+}
+
+export function formatCliError(error: unknown, exitCode: CliExitCode): CliErrorOutput {
+  return { error: toCliDiagnostic(error, exitCode) };
+}
+
+export function formatCliDiagnosticText(diagnostic: CliDiagnostic): string {
+  const lines = [
+    `error[${diagnostic.code}]: ${diagnostic.summary}`,
+    `reason: ${diagnostic.reason}`,
+    `next: ${diagnostic.suggestedAction}`,
+  ];
+
+  if (diagnostic.context && Object.keys(diagnostic.context).length > 0) {
+    lines.push("context:");
+    for (const [key, value] of Object.entries(diagnostic.context)) {
+      lines.push(`  ${key}: ${String(value)}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export function outputCliError(
+  error: unknown,
+  format: Format,
+  exitCode: CliExitCode,
+): void {
+  const diagnostic = toCliDiagnostic(error, exitCode);
+  if (format === "json") {
+    console.error(JSON.stringify({ error: diagnostic }, null, 2));
+    return;
+  }
+
+  console.error(formatCliDiagnosticText(diagnostic));
 }
 
 export function outputWarn(message: string): void {

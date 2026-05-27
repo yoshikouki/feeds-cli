@@ -70,6 +70,16 @@ function normalizeFeedSources(feed: FeedDefinition): FeedSourceDefinition[] {
             dateSelector: source.scrape.dateSelector?.trim() || undefined,
           }
         : undefined,
+      sitemap: source.sitemap
+        ? {
+            include: source.sitemap.include
+              ?.map((pattern) => pattern.trim())
+              .filter(Boolean),
+            exclude: source.sitemap.exclude
+              ?.map((pattern) => pattern.trim())
+              .filter(Boolean),
+          }
+        : undefined,
     };
   });
 }

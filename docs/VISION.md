@@ -24,17 +24,21 @@ feeds-cli collects and structures articles from feeds. Summarizing, delivering, 
 
 The entire collect → manage → extract → deduplicate cycle works without an LLM. An LLM is a nice-to-have, never a must-have.
 
-Every command supports `--format json`, so LLMs and agents connect through stdin/stdout naturally. No special integration needed.
+Machine-readable output is exposed through `--json`; `--format json` remains
+available as a compatibility alias. In JSON mode, command failures use a
+structured diagnostic envelope with `summary`, `reason`, and `suggestedAction`
+fields so agents can decide whether to retry, repair input, or stop. Human-mode
+errors render the same diagnostic as `error`, `reason`, and `next` lines.
 
 ### Human-friendly where humans touch, machine-friendly where machines touch
 
 - **Config** (feeds.json5) → humans read and write it → JSON5 (feed collections + source definitions, comments, trailing commas)
 - **Data** (feeds.db) → machines read and write it → SQLite (flexible queries, crash-resistant, fast)
-- **Output** → both → human-readable by default, `--format json` for structure
+- **Output** → both → human-readable by default, `--json` / `--format json` for structure
 
 ### One store, many exits
 
-The single source of truth is SQLite. Markdown, JSON, CSV, or any future format is an *interface* concern solved by export. Want to feed a knowledge graph? `--format md`. Want to pipe into `jq`? `--format json`. Storage choice and data utilization are decoupled.
+The single source of truth is SQLite. Markdown, JSON, CSV, or any future format is an *interface* concern solved by export. Want to feed a knowledge graph? `--format md`. Want to pipe into `jq`? `--json`. Storage choice and data utilization are decoupled.
 
 ### Local-first
 
@@ -95,7 +99,7 @@ flowchart TD
 
 ### v0.1 — Foundation
 
-Register feeds, scan, list articles, manage read state. RSS 2.0 / Atom 1.0 / JSON Feed 1.1 + HTML scraping. `--format json` on every command. Usable for daily workflows.
+Register feeds, scan, list articles, manage read state. RSS 2.0 / Atom 1.0 / JSON Feed 1.1 + HTML scraping. Machine-readable output through `--json` / `--format json`, with structured JSON errors. Usable for daily workflows.
 
 ### v0.2 — Curation
 

@@ -21,6 +21,12 @@ bun test                 # Run all tests
 bun test tests/db.test.ts  # Run a single test file
 ```
 
+For machine-readable CLI output, use `--json`; `--format json` is kept as an
+alias. JSON-mode command failures are written to stderr as structured errors
+with `schemaVersion`, `code`, `category`, `summary`, `reason`,
+`suggestedAction`, `exitCode`, and optional `context`. Human-mode command
+failures still include an error summary, reason, and next action.
+
 ## Bun Runtime Rules
 
 - Always use `bun` instead of `node`, `ts-node`, `npm`, `yarn`, `pnpm`, `npx`
@@ -112,7 +118,13 @@ CLI flags `--config`/`--db` override individual file paths.
 
 **Observability:**
 - **scan_log**: id (PK), feed_source_id (FK), scanned_at, status, article_count, error_message, duration_ms
+- **job_runs**: scheduled job attempts, status, trigger, duration, error_message
+- **events**: persisted runtime events and dispatch status
+- **hook_runs**: hook execution attempts, exit code, duration, error_message
 - **canonical_articles_fts**: FTS5 standalone (canonical_article_id UNINDEXED, title, summary, content)
+
+Use `feeds log cycles|scans|events|hooks|jobs --json` to inspect execution and
+control-plane history from the CLI.
 
 ### Dependencies
 

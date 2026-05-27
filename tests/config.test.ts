@@ -118,6 +118,10 @@ describe("config", () => {
               titleSelector: " h2 ",
               dateSelector: "",
             },
+            sitemap: {
+              include: [" /posts/ ", " "],
+              exclude: [" /drafts/ "],
+            },
           },
         ],
       });
@@ -132,6 +136,10 @@ describe("config", () => {
       expect(result.sources?.[0].scrape?.selector).toBe(".article");
       expect(result.sources?.[0].scrape?.titleSelector).toBe("h2");
       expect(result.sources?.[0].scrape?.dateSelector).toBeUndefined();
+      expect(result.sources?.[0].sitemap).toEqual({
+        include: ["/posts/"],
+        exclude: ["/drafts/"],
+      });
     });
 
     test("assigns source ids and defaults tags to empty array", () => {

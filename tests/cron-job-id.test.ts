@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   cronJobTitle,
+  currentCronJobTitle,
   extractCronJobTitleFromArgv,
   normalizeCronBaseDir,
 } from "../src/cron/job-id";
@@ -56,5 +57,17 @@ describe("normalizeCronBaseDir", () => {
     expect(normalizeCronBaseDir("/tmp/feeds/./nested/../workspace")).toBe(
       "/tmp/feeds/workspace",
     );
+  });
+});
+
+describe("currentCronJobTitle", () => {
+  test("falls back to execArgv when Bun argv omits cron flags", () => {
+    expect(
+      currentCronJobTitle(
+        undefined,
+        ["/path/to/bun"],
+        ["--cron-title=feeds-cli-example-abc123def456"],
+      ),
+    ).toBe("feeds-cli-example-abc123def456");
   });
 });

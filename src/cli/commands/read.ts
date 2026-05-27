@@ -1,19 +1,50 @@
 import type { ParsedArgs } from "../args.ts";
 import { UsageError } from "../args.ts";
+import { CliError } from "../diagnostic.ts";
 import { output } from "../output.ts";
 import { resolvePaths, ensureDir } from "../../paths.ts";
 import { FeedDatabase } from "../../db/index.ts";
 
 export async function readCommand(args: ParsedArgs): Promise<void> {
   const id = args.positionals[0];
-  if (!id) throw new UsageError("Usage: feeds read <id>");
+  if (!id) {
+    throw new UsageError("Usage: feeds read <id>", {
+      code: "usage.missing_argument",
+      reason: "The read command needs an article ID or unique ID prefix.",
+      suggestedAction: "Pass an article ID from 'feeds list'.",
+      context: { command: "read", argument: "id" },
+    });
+  }
 
   const paths = resolvePaths(args.flags);
   await ensureDir(paths.base);
 
   using db = new FeedDatabase(paths.db);
-  const article = db.getArticleByOccurrenceId(id);
-  if (!article) throw new Error(`Article not found: ${id}`);
+  let article: ReturnType<typeof db.getArticleByOccurrenceId>;
+  try {
+    article = db.getArticleByOccurrenceId(id);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.startsWith("Ambiguous ID prefix ")) {
+      throw new CliError(message, {
+        code: "data.ambiguous_article_id",
+        category: "data",
+        reason: "The provided ID prefix matches more than one stored article.",
+        suggestedAction: "Use a longer article ID prefix from 'feeds list'.",
+        context: { id },
+      });
+    }
+    throw err;
+  }
+  if (!article) {
+    throw new CliError(`Article not found: ${id}`, {
+      code: "data.article_not_found",
+      category: "data",
+      reason: "No stored article matches the requested ID or prefix.",
+      suggestedAction: "Run 'feeds list' and retry with a listed article ID.",
+      context: { id },
+    });
+  }
 
   const content = article.canonicalId
     ? db.getArticleContent(article.canonicalId)

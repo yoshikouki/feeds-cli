@@ -293,3 +293,77 @@ export const scanLog = sqliteTable(
     index("scan_log_cycle_idx").on(table.cycleId),
   ],
 );
+
+// ─── Control Plane (Phase 1) ───
+
+export const jobRuns = sqliteTable(
+  "job_runs",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    pipelineId: text("pipeline_id").notNull(),
+    jobId: text("job_id").notNull(),
+    purpose: text("purpose").notNull(),
+    triggeredBy: text("triggered_by").notNull(),
+    status: text("status").notNull(),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
+    durationMs: integer("duration_ms"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("job_runs_workspace_started_idx").on(table.workspaceId, table.startedAt),
+    index("job_runs_job_started_idx").on(table.jobId, table.startedAt),
+    index("job_runs_status_idx").on(table.status),
+  ],
+);
+
+export const events = sqliteTable(
+  "events",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    pipelineId: text("pipeline_id").notNull(),
+    kind: text("kind").notNull(),
+    status: text("status").notNull(),
+    payload: text("payload").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    lastDispatchAt: text("last_dispatch_at"),
+    lastError: text("last_error"),
+  },
+  (table) => [
+    index("events_workspace_occurred_idx").on(table.workspaceId, table.occurredAt),
+    index("events_status_occurred_idx").on(table.status, table.occurredAt),
+    index("events_kind_idx").on(table.kind),
+  ],
+);
+
+export const hookRuns = sqliteTable(
+  "hook_runs",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
+    pipelineId: text("pipeline_id").notNull(),
+    hookKey: text("hook_key").notNull(),
+    status: text("status").notNull(),
+    attempt: integer("attempt").notNull(),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
+    durationMs: integer("duration_ms"),
+    exitCode: integer("exit_code"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("hook_runs_event_idx").on(table.eventId),
+    index("hook_runs_workspace_started_idx").on(table.workspaceId, table.startedAt),
+    uniqueIndex("hook_runs_event_hook_attempt_unique").on(
+      table.eventId,
+      table.hookKey,
+      table.attempt,
+    ),
+  ],
+);

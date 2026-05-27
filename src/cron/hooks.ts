@@ -54,6 +54,13 @@ export async function runHooks(
   context: HookContext,
 ): Promise<HookResult[]> {
   const hooks = await discoverHooks(hooksDir, context.event);
+  return executeHooks(hooks, context);
+}
+
+export async function executeHooks(
+  hooks: readonly string[],
+  context: HookContext,
+): Promise<HookResult[]> {
   if (hooks.length === 0) return [];
 
   const results: HookResult[] = [];
