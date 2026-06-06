@@ -19,6 +19,7 @@ export interface ScanResult {
 
 export interface NewArticle {
   id: string;
+  sourceId: string;
   title: string;
   url: string;
   publishedAt: string | null;
@@ -88,6 +89,7 @@ export async function scanFeed(
         result.articlesInserted++;
         result.newArticles.push({
           id,
+          sourceId: dbSource.id,
           title: article.title,
           url: article.url,
           publishedAt: article.publishedAt,

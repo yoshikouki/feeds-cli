@@ -122,6 +122,10 @@ describe("config", () => {
               include: [" /posts/ ", " "],
               exclude: [" /drafts/ "],
             },
+            hooks: {
+              include: [{ title: " stable ", url: " /releases/ " }, {}],
+              exclude: [{ title: " /beta/i ", summary: " preview " }],
+            },
           },
         ],
       });
@@ -140,6 +144,10 @@ describe("config", () => {
         include: ["/posts/"],
         exclude: ["/drafts/"],
       });
+      expect(result.sources?.[0].hooks).toEqual({
+        include: [{ title: "stable", url: "/releases/" }],
+        exclude: [{ title: "/beta/i", summary: "preview" }],
+      });
     });
 
     test("assigns source ids and defaults tags to empty array", () => {
@@ -150,6 +158,21 @@ describe("config", () => {
       expect(result.sources?.[0].id).toBeString();
       expect(result.sources?.[0].tags).toEqual([]);
       expect(result.sources?.[0].scrape).toBeUndefined();
+    });
+
+    test("rejects invalid source hook regex patterns", () => {
+      expect(() =>
+        normalizeFeedDefinition({
+          name: "Test",
+          sources: [
+            {
+              name: "main",
+              url: "https://example.com",
+              hooks: { exclude: [{ title: "[" }] },
+            },
+          ],
+        }),
+      ).toThrow("Invalid regular expression");
     });
 
     test("requires at least one source", () => {

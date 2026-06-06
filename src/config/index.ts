@@ -5,8 +5,11 @@ import type {
   ConfigFile,
   FeedDefinition,
   FeedSourceDefinition,
+  HookEntryRule,
+  SourceHooksConfig,
 } from "../types";
 import { createId } from "../types";
+import { compileHookPattern, HOOK_ENTRY_FIELDS } from "../hooks/filter.ts";
 
 export async function loadConfig(configPath: string): Promise<ConfigFile> {
   const file = Bun.file(configPath);
@@ -80,8 +83,53 @@ function normalizeFeedSources(feed: FeedDefinition): FeedSourceDefinition[] {
               .filter(Boolean),
           }
         : undefined,
+      hooks: normalizeHooksConfig(source.hooks),
     };
   });
+}
+
+function normalizeHooksConfig(
+  hooks: SourceHooksConfig | undefined,
+): SourceHooksConfig | undefined {
+  if (!hooks) {
+    return undefined;
+  }
+
+  const include = normalizeHookRules(hooks.include);
+  const exclude = normalizeHookRules(hooks.exclude);
+  if (!include && !exclude) {
+    return undefined;
+  }
+
+  const normalized: SourceHooksConfig = {};
+  if (include) normalized.include = include;
+  if (exclude) normalized.exclude = exclude;
+  return normalized;
+}
+
+function normalizeHookRules(
+  rules: HookEntryRule[] | undefined,
+): HookEntryRule[] | undefined {
+  const normalized = rules
+    ?.map(normalizeHookRule)
+    .filter((rule) => Object.keys(rule).length > 0);
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeHookRule(rule: HookEntryRule): HookEntryRule {
+  const normalized: HookEntryRule = {};
+
+  for (const field of HOOK_ENTRY_FIELDS) {
+    const pattern = rule[field]?.trim();
+    if (!pattern) {
+      continue;
+    }
+
+    compileHookPattern(pattern);
+    normalized[field] = pattern;
+  }
+
+  return normalized;
 }
 
 export async function addFeedToConfig(

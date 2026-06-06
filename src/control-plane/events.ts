@@ -10,7 +10,9 @@ import type {
   ScanStartedPayload,
 } from "../contracts/event.ts";
 import type { FeedDatabase } from "../db/index.ts";
+import { shouldDispatchEntryHooks } from "../hooks/filter.ts";
 import type { ResolvedPaths } from "../paths.ts";
+import type { SourceHooksConfig } from "../types.ts";
 import {
   discoverHooks,
   executeHooks,
@@ -18,9 +20,15 @@ import {
 } from "../cron/hooks.ts";
 import { workspaceIdFromBaseDir } from "./identity.ts";
 
+export type EventDispatchPaths =
+  & Pick<ResolvedPaths, "base" | "hooksDir" | "hooksEnabled">
+  & {
+    sourceHookConfigs?: ReadonlyMap<string, SourceHooksConfig>;
+  };
+
 export async function dispatchPendingEvents(
   db: FeedDatabase,
-  paths: Pick<ResolvedPaths, "base" | "hooksDir" | "hooksEnabled">,
+  paths: EventDispatchPaths,
 ): Promise<void> {
   const workspaceId = workspaceIdFromBaseDir(paths.base);
   const pendingEvents = db.listDispatchableEvents(workspaceId);
@@ -28,6 +36,11 @@ export async function dispatchPendingEvents(
   for (const record of pendingEvents) {
     const hookContext = hookContextForEvent(record.event);
     if (!paths.hooksEnabled) {
+      db.markEventDispatched(record.event.id);
+      continue;
+    }
+
+    if (!shouldDispatchHooksForEvent(record.event, paths.sourceHookConfigs)) {
       db.markEventDispatched(record.event.id);
       continue;
     }
@@ -85,6 +98,21 @@ export async function dispatchPendingEvents(
 
     db.markEventDispatched(record.event.id);
   }
+}
+
+function shouldDispatchHooksForEvent(
+  event: EventEnvelope,
+  sourceHookConfigs: ReadonlyMap<string, SourceHooksConfig> | undefined,
+): boolean {
+  if (event.kind !== "entry.discovered") {
+    return true;
+  }
+
+  const payload = event.payload as EntryDiscoveredPayload;
+  return shouldDispatchEntryHooks(
+    payload,
+    sourceHookConfigs?.get(payload.sourceId),
+  );
 }
 
 function hookContextForEvent(event: EventEnvelope): HookContext {

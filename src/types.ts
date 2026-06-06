@@ -13,6 +13,15 @@ export interface SitemapConfig {
   exclude?: string[];
 }
 
+export type HookEntryField = "title" | "url" | "summary";
+
+export type HookEntryRule = Partial<Record<HookEntryField, string>>;
+
+export interface SourceHooksConfig {
+  include?: HookEntryRule[];
+  exclude?: HookEntryRule[];
+}
+
 export type SourceKind =
   | "rss"
   | "atom"
@@ -30,6 +39,7 @@ export interface FeedSourceDefinition {
   tags?: string[];
   scrape?: ScrapeConfig;
   sitemap?: SitemapConfig;
+  hooks?: SourceHooksConfig;
 }
 
 export interface FeedDefinition {
